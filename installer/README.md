@@ -15,7 +15,7 @@ Nothing from the game ships with it. Running the installer again resumes where i
 | Tab | Setting | How it's applied |
 |---|---|---|
 | Display | Fullscreen, output resolution | `--fullscreen`, `--resolution` (or `--video_mode_*` and `--window_*` windowed) |
-| Display | Render resolution | `BOTS_GFX_RENDER_SCALE` 1 / 1.5 / 2 / 3 (the game draws 1280×720) |
+| Display | Render resolution | `BOTS_GFX_RENDER_SCALE` 1 / 2 / 3 (the game draws 1280×720). Whole steps only: 1.5 broke effects that need exact pixel positions |
 | Display | Anti-aliasing | `BOTS_GFX_FXAA` 1 / 2 (native renderer patch 0010) |
 | Display | Frame rate 30 / 60 | `--vsync=false --frame_rate=30|60` (`src/fps_unlock.cpp`, `src/frame_pacing.cpp`) |
 | Display | FPS counter | `--show_fps`, `--show_fps_detail` (drawn by the native renderer) |

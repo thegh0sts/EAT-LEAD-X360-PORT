@@ -90,7 +90,9 @@ Update this file at the end of each working session. Started 2026-11-19.
   achievement pop-ups), Graphics (brightness, texture filtering), Controls (button prompts Auto / PlayStation only /
   Xbox only, extra stick dead zone, vibration via `src/vibration.cpp`, B quits), Saves, Achievements, Save settings.
   `build_installer.bat` packs the SDK built by `tools\build_native.bat` (bundle `el1`). Version 0.1.0. Our own icon.
-  Not run yet (no tkinter in the cloud workspace; the argument building was checked there).
+  First run (2026-11-19): at the default render scale 1.5 the main menu's model drew in green/orange stripes and a
+  cutscene went cyan; at 2x both are right. The launcher now offers 1x / 2x / 3x only (default 2x). Fractional
+  scales would need vPos in whole guest pixels for those effects (SDK patch 0012 gives fractional ones there).
 
 ## Next steps
 

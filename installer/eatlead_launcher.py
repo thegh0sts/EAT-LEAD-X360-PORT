@@ -45,10 +45,11 @@ LANGUAGES = {"English": 1, "German": 3, "French": 4, "Spanish": 5, "Italian": 6}
 RESOLUTIONS = ["Original (720p)", "1080p", "1440p", "4K"]
 RES_FLAG = {"1080p": "1080p", "1440p": "1440p", "4K": "4k"}
 RES_SIZE = {"Original (720p)": (1280, 720), "1080p": (1920, 1080), "1440p": (2560, 1440), "4K": (3840, 2160)}
-# Render resolution: the size the native renderer draws at (BOTS_GFX_RENDER_SCALE, any scale from 0.25 to 3);
-# the game itself draws 1280x720. 1x-3x all looked right in the first level at 1440p / 4K (2026-11-19).
-SCALES = ["1280×720 (original)", "1920×1080", "2560×1440", "3840×2160 (demanding)"]
-SCALE_FACTOR = {SCALES[0]: 1, SCALES[1]: 1.5, SCALES[2]: 2, SCALES[3]: 3}
+# Render resolution: the size the native renderer draws at (BOTS_GFX_RENDER_SCALE); the game itself draws 1280x720.
+# Whole steps only: at 1.5x (1920x1080) effects that work from exact pixel positions broke (the main menu's model in
+# green and orange stripes, a cutscene all cyan), at 2x they're right (2026-11-19).
+SCALES = ["1280×720 (original)", "2560×1440", "3840×2160 (demanding)"]
+SCALE_FACTOR = {SCALES[0]: 1, SCALES[1]: 2, SCALES[2]: 3}
 AA = ["Off", "FXAA", "FXAA (strong)"]
 FXAA_MODE = {"FXAA": "1", "FXAA (strong)": "2"}
 TEXTURE_FILTERING = ["Game's own", "Anisotropic 4x", "Anisotropic 8x", "Anisotropic 16x"]
@@ -64,7 +65,7 @@ PAD_PROMPTS_FLAG = {"Auto": "auto", "PlayStation only": "playstation", "Xbox onl
 DEFAULTS = {
     "fullscreen": True,
     "resolution": "1080p",
-    "render_scale": SCALES[1],
+    "render_scale": SCALES[1],  # 2x
     "aa": "FXAA",
     "texture_filtering": "Anisotropic 16x",
     "brightness": 100,
