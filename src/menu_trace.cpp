@@ -128,8 +128,9 @@ std::mutex& Mutex() {
 thread_local const char* g_action = nullptr;  // "Show" / "Hide" while slot 13 runs
 thread_local uint32_t g_object = 0;
 
-void Run(const char* what, const PPCContext& ctx) {
-  if (!REXCVAR_GET(menu_trace)) return;
+// Whether this run of an action is a new one (not the same action again within a second: they may run every
+// frame while active); logged with --menu_trace.
+bool Run(const char* what, const PPCContext& ctx) {
   using clock = std::chrono::steady_clock;
   static std::unordered_map<uint32_t, clock::time_point> last;
   std::lock_guard<std::mutex> lock(Mutex());
@@ -138,7 +139,8 @@ void Run(const char* what, const PPCContext& ctx) {
   auto it = last.find(obj);
   const bool fresh = it == last.end() || now - it->second > std::chrono::seconds(1);
   last[obj] = now;
-  if (fresh) REXLOG_INFO("menu_trace: {} runs, action {:08X}", what, obj);
+  if (fresh && REXCVAR_GET(menu_trace)) REXLOG_INFO("menu_trace: {} runs, action {:08X}", what, obj);
+  return fresh;
 }
 
 void Resolved(uint32_t dialog, uint8_t* base) {
@@ -163,13 +165,19 @@ void Resolved(uint32_t dialog, uint8_t* base) {
 
 }  // namespace
 
+namespace eatlead::menu_quit {  // menu_quit.cpp: B on the main menu quits
+void OnShow(uint32_t action);
+void OnHide(uint32_t action);
+void OnPad(uint16_t pressed);
+}  // namespace eatlead::menu_quit
+
 REX_EXTERN(__imp__sub_82259630);
 REX_EXTERN(__imp__sub_82259258);
 REX_EXTERN(__imp__sub_822459A8);
 
 // "UI Show Dialog", vtable slot 13.
 extern "C" REX_FUNC(sub_82259630) {
-  Run("Show", ctx);
+  if (Run("Show", ctx)) eatlead::menu_quit::OnShow(ctx.r3.u32);
   const char* prev = g_action;
   const uint32_t prev_obj = g_object;
   g_action = "Show";
@@ -181,7 +189,7 @@ extern "C" REX_FUNC(sub_82259630) {
 
 // "UI Hide Dialog", vtable slot 13.
 extern "C" REX_FUNC(sub_82259258) {
-  Run("Hide", ctx);
+  if (Run("Hide", ctx)) eatlead::menu_quit::OnHide(ctx.r3.u32);
   const char* prev = g_action;
   const uint32_t prev_obj = g_object;
   g_action = "Hide";
@@ -220,14 +228,18 @@ extern "C" REX_FUNC(sub_82268C50) {
   const uint32_t user = ctx.r3.u32;
   const uint32_t state = ctx.r4.u32;
   __imp__sub_82268C50(ctx, base);
-  if (!REXCVAR_GET(menu_trace) || user > 3 || !state || ctx.r3.u32 != 0) return;  // 0 = ERROR_SUCCESS
+  if (user > 3 || !state || ctx.r3.u32 != 0) return;  // 0 = ERROR_SUCCESS
   static uint16_t last[4] = {};
   const uint16_t buttons = uint16_t(base[state + 4] << 8 | base[state + 5]);
-  std::lock_guard<std::mutex> lock(Mutex());
-  if (buttons == last[user]) return;
-  const uint16_t pressed = buttons & ~last[user];
-  last[user] = buttons;
-  if (pressed) REXLOG_INFO("menu_trace: pad {} pressed {} (held {})", user, ButtonNames(pressed), ButtonNames(buttons));
+  uint16_t pressed;
+  {
+    std::lock_guard<std::mutex> lock(Mutex());
+    pressed = buttons & ~last[user];
+    last[user] = buttons;
+  }
+  eatlead::menu_quit::OnPad(pressed);
+  if (pressed && REXCVAR_GET(menu_trace))
+    REXLOG_INFO("menu_trace: pad {} pressed {} (held {})", user, ButtonNames(pressed), ButtonNames(buttons));
 }
 
 REX_EXTERN(__imp__sub_82269408);

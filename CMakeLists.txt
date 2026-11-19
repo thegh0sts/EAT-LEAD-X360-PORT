@@ -22,6 +22,7 @@ set(EATLEAD_SOURCES
     src/fps_unlock.cpp
     src/achievement_list.cpp
     src/menu_trace.cpp
+    src/menu_quit.cpp
 )
 
 if(WIN32)
