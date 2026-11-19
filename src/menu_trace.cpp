@@ -49,11 +49,11 @@ bool Readable(uint32_t addr) {
   return ok;
 }
 
-// Heap, physical memory or the executable's data.
+// Heap (the game's objects are at 0xF...), physical memory or the executable's data.
 bool Pointer(uint32_t a) {
   return ((a >= 0x40000000 && a < 0x80000000) || (a >= 0x82000000 && a < 0x82600000) ||
-          (a >= 0xA0000000 && a < 0xE0000000)) &&
-         Readable(a) && Readable(a + 63);
+          (a >= 0xA0000000 && a < 0xFFFF0000)) &&
+         Readable(a) && Readable(a + 0xFF);
 }
 
 // Text at a: 3+ printable characters then a 0 (8-bit), or the same as UTF-16.
@@ -133,6 +133,12 @@ void Resolved(uint32_t dialog, uint8_t* base) {
     std::set<uint32_t> seen;
     Strings(base, dialog, 0x100, 2, "", seen, text);
     text = "\n    words" + Dump(base, dialog, 0x80) + "\n    text" + text;
+  }
+  if (Pointer(g_object) && dumped.insert(g_object).second) {
+    std::set<uint32_t> seen;
+    std::string atext;
+    Strings(base, g_object, 0xA4, 2, "", seen, atext);
+    text += "\n    action words" + Dump(base, g_object, 0xA4) + "\n    action text" + atext;
   }
   REXLOG_INFO("menu_trace: {} action {:08X} -> dialog {:08X}{}", g_action, g_object, dialog, text);
 }
