@@ -69,6 +69,11 @@ Update this file at the end of each working session. Started 2026-11-19.
   The game gives decals a depth bias that, converted to the host's float depth, came out too small:
   `BOTS_GFX_DEPTH_BIAS_SCALE` 4, 8 and 16 all fixed it, 0 made it worse. `src/gpu_preload.cpp` sets 4 before the
   plugin loads unless the environment has a value. Still to check: nothing (decals) showing through what's in front.
+  Native patch 0015 also scales the slope part of the bias with the render scale.
+  **Known issue, left for later (2026-11-19):** a decal on a decal (bullet holes on the posters) still flickers, at any
+  bias scale (4, 8). Likely the depth precision: both get the same bias and rely on landing at the same depth, which
+  the Xbox's 24-bit depth rounds to equal and the host's 32-bit float doesn't. Fix idea: round decal draws' depth to
+  24 bits in the pixel shader (an SDK translator change, biased draws only).
 - **FPS counter**: `--show_fps` (and `--show_fps_detail`, `--brightness`, `--achievement_popups`), drawn by the
   native renderer as in Bourne.
 - **Repository**: thegh0sts/EAT-LEAD-X360-PORT (first commit from the cloud workspace, 2026-11-19).
