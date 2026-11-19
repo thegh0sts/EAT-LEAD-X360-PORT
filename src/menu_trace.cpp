@@ -14,6 +14,9 @@
 // The controller too: sub_82268C50 is the game's XInputGetState(user, state*), calling XamInputGetState(user, 1,
 // state); each change of the buttons is logged with their names (B = 0x2000), so a press that opens or closes
 // nothing still shows.
+//
+// And the files the game opens through sub_82269408(path) (an ANSI path, NtCreateFile): which Regions\*.rgn is
+// loaded tells the front end from a level.
 
 #include "generated/default/eatlead_pch.h"
 
@@ -225,4 +228,18 @@ extern "C" REX_FUNC(sub_82268C50) {
   const uint16_t pressed = buttons & ~last[user];
   last[user] = buttons;
   if (pressed) REXLOG_INFO("menu_trace: pad {} pressed {} (held {})", user, ButtonNames(pressed), ButtonNames(buttons));
+}
+
+REX_EXTERN(__imp__sub_82269408);
+
+// The game's file open by path (r3: a 0-terminated ANSI path).
+extern "C" REX_FUNC(sub_82269408) {
+  if (REXCVAR_GET(menu_trace)) {
+    const uint32_t p = ctx.r3.u32;
+    std::string path;
+    if (Readable(base, p))
+      for (uint32_t i = 0; i < 260 && base[p + i]; ++i) path += char(base[p + i]);
+    REXLOG_INFO("menu_trace: open {}", path);
+  }
+  __imp__sub_82269408(ctx, base);
 }
