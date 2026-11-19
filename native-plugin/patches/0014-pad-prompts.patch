@@ -284,7 +284,7 @@ index dcf9d97..588ee0a 100644
                         const rex::graphics::SpirvShader::SamplerBinding& binding);
  
 diff --git a/src/gfx/vk/texture.cpp b/src/gfx/vk/texture.cpp
-index a540210..6f75e23 100644
+index a540210..69ff8a2 100644
 --- a/src/gfx/vk/texture.cpp
 +++ b/src/gfx/vk/texture.cpp
 @@ -272,8 +272,10 @@ VkImageView Renderer::TextureView(const rg::xenos::xe_gpu_texture_fetch_t& fetch
@@ -300,7 +300,7 @@ index a540210..6f75e23 100644
      DropGuestTexture(*slot);  // earlier draws of this submission still sample the old contents
      *slot = GuestTexture{};
      LoadGuestTexture(fetch, *slot);
-@@ -438,6 +440,21 @@ void Renderer::LoadTexture(const rg::xenos::xe_gpu_texture_fetch_t& fetch, Guest
+@@ -438,6 +440,25 @@ void Renderer::LoadTexture(const rg::xenos::xe_gpu_texture_fetch_t& fetch, Guest
        return;
      }
    }
@@ -314,7 +314,11 @@ index a540210..6f75e23 100644
 +      texture.pad_sheet = true;
 +      texture.prompt_generation = pad_prompt_mode_;
 +      if (pad_prompt_mode_ == 1) {
-+        const std::vector<uint8_t> pixels = bots::prompts::BuildPadSheet(sheet, memory_(address));
++        std::vector<uint8_t> pixels = bots::prompts::BuildPadSheet(sheet, memory_(address));
++        // In the byte order the guest texture reaches the host in (its ARGB words as little-endian dwords: B G R A),
++        // since the game's fetch swizzle, applied to this image too, puts red and blue back. Uploaded as RGBA they
++        // came out swapped (the square purple, the circle blue).
++        for (size_t i = 0; i + 3 < pixels.size(); i += 4) std::swap(pixels[i], pixels[i + 2]);
 +        if (!pixels.empty() && LoadRgbaTexture(texture, address, width * height * 4, pixels, width, height)) return;
 +      }
 +    }
@@ -322,7 +326,7 @@ index a540210..6f75e23 100644
    const BcDecode decode = bc_textures_ ? BcDecode::kNone : BcDecodeFor(host.format);
    const VkFormat image_format = decode == BcDecode::kNone ? host.format : BcDecodedFormat(decode, pack_bc1_);
    const uint32_t decoded_bpp = BcDecodedBytesPerTexel(decode, pack_bc1_);
-@@ -595,6 +612,35 @@ bool Renderer::LoadPromptAtlas(GuestTexture& texture, uint32_t address, bots::Pr
+@@ -595,6 +616,35 @@ bool Renderer::LoadPromptAtlas(GuestTexture& texture, uint32_t address, bots::Pr
    return true;
  }
  
