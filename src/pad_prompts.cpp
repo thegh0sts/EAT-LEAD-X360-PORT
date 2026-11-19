@@ -16,7 +16,8 @@
 // 0000000100000001.loc, UTF-16 big-endian, length-prefixed), drawn with the game's font. With PlayStation prompts
 // it's rewritten in guest memory, where the file is loaded, to "Press OPTIONS to start": the same length, so the
 // string table needs no other change; switching back restores it. Found once by scanning guest memory for the
-// string (retried every few seconds until the text file is loaded). English only so far.
+// string on a background thread (retried every few seconds until the text file is loaded), through
+// Read/WriteProcessMemory so a page that changes protection fails rather than crashes. English only so far.
 
 #include "generated/default/eatlead_pch.h"
 
@@ -67,46 +68,60 @@ constexpr TextSwap kTexts[] = {
 };
 constexpr size_t kTextCount = sizeof(kTexts) / sizeof(kTexts[0]);
 
-// Whether [a, a + size) of guest memory is committed and readable now.
-bool Readable(const uint8_t* base, uint32_t a, size_t size) {
+// Guest memory is read and written through ReadProcessMemory / WriteProcessMemory, which fail instead of faulting:
+// pages can change protection under us (the renderer's write tracking), and the first build, reading directly,
+// crashed in the scan (2026-11-19).
+bool ReadGuest(const uint8_t* base, uint64_t a, void* out, size_t size) {
 #ifdef _WIN32
-  for (uint64_t p = a & ~0xFFFull; p < uint64_t(a) + size; p += 0x1000) {
-    MEMORY_BASIC_INFORMATION info{};
-    if (!VirtualQuery(base + p, &info, sizeof(info)) || info.State != MEM_COMMIT ||
-        (info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) || !(info.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)))
-      return false;
-  }
-  return true;
+  SIZE_T got = 0;
+  return ReadProcessMemory(GetCurrentProcess(), base + a, out, size, &got) && got == size;
 #else
-  (void)base, (void)a, (void)size;
+  (void)base, (void)a, (void)out, (void)size;
   return false;
 #endif
 }
 
-// Every copy of `needle` in committed guest memory from 0x40000000 (at most 8).
+bool WriteGuest(uint8_t* base, uint64_t a, const void* data, size_t size) {
+#ifdef _WIN32
+  SIZE_T put = 0;
+  return WriteProcessMemory(GetCurrentProcess(), base + a, data, size, &put) && put == size;
+#else
+  (void)base, (void)a, (void)data, (void)size;
+  return false;
+#endif
+}
+
+bool GuestEquals(const uint8_t* base, uint32_t a, const std::vector<uint8_t>& text) {
+  std::vector<uint8_t> now(text.size());
+  return ReadGuest(base, a, now.data(), now.size()) && now == text;
+}
+
+// Every copy of `needle` in committed guest memory from 0x40000000 (at most 8), read 1 MB at a time.
 std::vector<uint32_t> FindInGuest(const uint8_t* base, const std::vector<uint8_t>& needle) {
   std::vector<uint32_t> found;
 #ifdef _WIN32
+  constexpr size_t kChunk = 1 << 20;
+  std::vector<uint8_t> buf(kChunk + needle.size());
   uint64_t addr = 0x40000000;
   while (addr < 0xFFFF0000ull && found.size() < 8) {
     MEMORY_BASIC_INFORMATION info{};
     if (!VirtualQuery(base + addr, &info, sizeof(info))) break;
     const uint64_t region_end = uint64_t(static_cast<const uint8_t*>(info.BaseAddress) - base) + info.RegionSize;
-    const bool readable = info.State == MEM_COMMIT && !(info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
-                          (info.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
-                                           PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
-    if (readable && region_end > addr) {
-      const uint8_t* begin = base + addr;
-      const uint8_t* end = base + std::min<uint64_t>(region_end, 0xFFFF0000ull);
-      const auto it_end = end;
-      for (const uint8_t* p = begin; p < it_end && found.size() < 8;) {
-        p = std::search(p, it_end, needle.begin(), needle.end());
-        if (p == it_end) break;
-        found.push_back(uint32_t(p - base));
-        p += needle.size();
+    if (region_end <= addr) break;
+    if (info.State == MEM_COMMIT) {
+      const uint64_t end = std::min<uint64_t>(region_end, 0xFFFF0000ull);
+      for (uint64_t at = addr; at < end && found.size() < 8; at += kChunk) {
+        const size_t size = size_t(std::min<uint64_t>(kChunk + needle.size() - 1, end - at));
+        if (size < needle.size() || !ReadGuest(base, at, buf.data(), size)) continue;
+        const auto first = buf.begin(), last = buf.begin() + ptrdiff_t(size);
+        for (auto p = first; found.size() < 8;) {
+          p = std::search(p, last, needle.begin(), needle.end());
+          if (p == last) break;
+          if (size_t(p - first) < kChunk) found.push_back(uint32_t(at + uint64_t(p - first)));
+          p += ptrdiff_t(needle.size());
+        }
       }
     }
-    if (region_end <= addr) break;
     addr = region_end;
   }
 #else
@@ -141,15 +156,13 @@ void SwapTexts(uint8_t* base, bool ps) {
     const auto xbox = Utf16Be(kTexts[i].xbox), play = Utf16Be(kTexts[i].playstation);
     auto& list = t.addresses[i];
     // Drop copies that are neither text any more (freed or reused).
-    std::erase_if(list, [&](uint32_t a) {
-      return !Readable(base, a, xbox.size()) || std::memcmp(base + a, xbox.data(), xbox.size()) != 0 && std::memcmp(base + a, play.data(), play.size()) != 0;
-    });
+    std::erase_if(list, [&](uint32_t a) { return !GuestEquals(base, a, xbox) && !GuestEquals(base, a, play); });
     if (list.empty()) {
       missing = true;
       continue;
     }
     if (t.applied && ps == t.last_ps) continue;
-    for (uint32_t a : list) std::memcpy(base + a, (ps ? play : xbox).data(), xbox.size());
+    for (uint32_t a : list) WriteGuest(base, a, (ps ? play : xbox).data(), xbox.size());
   }
   t.applied = true;
   t.last_ps = ps;
