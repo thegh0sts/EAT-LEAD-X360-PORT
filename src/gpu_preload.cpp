@@ -20,6 +20,7 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include <cstdlib>
 #include <cwctype>
 #include <string>
 #include <string_view>
@@ -55,7 +56,19 @@ std::wstring PluginName() {
   return name.empty() ? L"native" : name;
 }
 
+// Native renderer defaults for this game, set before the plugin loads unless the environment already has them.
+// BOTS_GFX_DEPTH_BIAS_SCALE: the game nudges decals (the notice board's posters, ...) towards the camera with a depth
+// bias; converted to the host's 32-bit float depth it was too small and they z-fought (whole triangles flickering)
+// at any render scale. 4 was the smallest of 4 / 8 / 16 that stopped it (2026-11-19); 0 made it worse.
+void NativeRendererDefaults() {
+  char value[8];
+  if (!GetEnvironmentVariableA("BOTS_GFX_DEPTH_BIAS_SCALE", value, sizeof(value))) {
+    _putenv_s("BOTS_GFX_DEPTH_BIAS_SCALE", "4");  // the CRT's copy and the process's (the plugin reads getenv)
+  }
+}
+
 HMODULE PreloadGpuPlugin() {
+  NativeRendererDefaults();
   wchar_t buf[MAX_PATH];
   DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
   if (n == 0 || n >= MAX_PATH) {
