@@ -1,0 +1,209 @@
+diff --git a/src/gfx/native.cpp b/src/gfx/native.cpp
+index 07f6e3e..d8fc080 100644
+--- a/src/gfx/native.cpp
++++ b/src/gfx/native.cpp
+@@ -136,6 +136,7 @@ class NativeCommandProcessor final : public rg::CommandProcessor {
+     ++frames_;
+     UpdateFpsOverlay();
+     UpdateToast();
++    UpdateHint();
+     // tbc: --brightness (the game's setting, through the shared cvar registry; 0 if the game doesn't have it).
+     static const float brightness = float(rex::cvar::Query<double>("brightness"));
+     if (brightness > 0.0f) renderer_->set_brightness(brightness);
+@@ -620,6 +621,71 @@ class NativeCommandProcessor final : public rg::CommandProcessor {
+     stbi_image_free(rgba);
+     return true;
+   }
++  // eatlead: a menu hint the game asks for through its cvars: --menu_hint (an int, read each frame; the game changes
++  // it while running, and an int can be read while it's written) picks image N (from 1) of --menu_hint_images, a
++  // comma-separated list of names fixed at start, each hints/<name>.png (or assets/hints/ when run from the project
++  // folder); 0 hides it. Drawn at --menu_hint_pos "x,y" (1080p pixels of a 16:9 frame) by the present pass
++  // (Renderer::SetHint), fading in and out over 0.15 s.
++  void UpdateHint() {
++    static const std::string images = rex::cvar::Query<std::string>("menu_hint_images");
++    if (images.empty()) return;
++    const int32_t index = rex::cvar::Query<int32_t>("menu_hint");
++    std::string name;
++    if (index > 0) {
++      size_t at = 0;
++      for (int32_t i = 1; i < index && at != std::string::npos; ++i) {
++        at = images.find(',', at);
++        if (at != std::string::npos) ++at;
++      }
++      if (at != std::string::npos) name = images.substr(at, images.find(',', at) - at);
++    }
++    const auto now = std::chrono::steady_clock::now();
++    const float dt = hint_last_.time_since_epoch().count() ? std::chrono::duration<float>(now - hint_last_).count() : 0.0f;
++    hint_last_ = now;
++    if (!name.empty() && name != hint_name_) {
++      hint_name_ = name;
++      hint_loaded_ = LoadHint(name);
++      static const std::string pos = rex::cvar::Query<std::string>("menu_hint_pos");
++      hint_x_ = 0.0f;
++      hint_y_ = 0.0f;
++      std::sscanf(pos.c_str(), "%f,%f", &hint_x_, &hint_y_);
++    }
++    const float target = !name.empty() && hint_loaded_ ? 1.0f : 0.0f;
++    hint_alpha_ = target > hint_alpha_ ? std::min(target, hint_alpha_ + dt / 0.15f)
++                                       : std::max(target, hint_alpha_ - dt / 0.15f);
++    if (hint_alpha_ <= 0.0f && !hint_showing_) return;
++    hint_showing_ = hint_alpha_ > 0.0f;
++    renderer_->SetHint(hint_alpha_, hint_x_, hint_y_, hint_width_, hint_height_, hint_pixels_.data());
++  }
++  bool LoadHint(const std::string& name) {
++    for (const char* dir : {"hints", "assets/hints"}) {
++      std::ifstream file(std::filesystem::path(dir) / (name + ".png"), std::ios::binary);
++      const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
++      if (bytes.empty()) continue;
++      int w = 0, h = 0, n = 0;
++      stbi_uc* rgba = stbi_load_from_memory(bytes.data(), int(bytes.size()), &w, &h, &n, 4);
++      if (!rgba) continue;
++      const bool fits = w > 0 && h > 0 && w <= 160 && h <= 48;
++      if (fits) {
++        hint_width_ = uint32_t(w);
++        hint_height_ = uint32_t(h);
++        hint_pixels_.assign(size_t(w) * h, 0);
++        std::memcpy(hint_pixels_.data(), rgba, size_t(w) * h * 4);
++      }
++      stbi_image_free(rgba);
++      std::fprintf(stderr, "gfx native: menu hint %s/%s.png %dx%d%s\n", dir, name.c_str(), w, h,
++                   fits ? "" : " (too big: at most 160x48)");
++      if (fits) return true;
++    }
++    return false;
++  }
++  std::string hint_name_;
++  bool hint_loaded_ = false, hint_showing_ = false;
++  float hint_alpha_ = 0.0f, hint_x_ = 0.0f, hint_y_ = 0.0f;
++  uint32_t hint_width_ = 0, hint_height_ = 0;
++  std::vector<uint32_t> hint_pixels_;
++  std::chrono::steady_clock::time_point hint_last_{};
++
+   std::mutex toast_mutex_;
+   std::deque<PendingToast> toasts_;
+   rex::system::AchievementListenerHandle toast_listener_ = 0;
+diff --git a/src/gfx/vk/present.cpp b/src/gfx/vk/present.cpp
+index 07cd388..a6adb27 100644
+--- a/src/gfx/vk/present.cpp
++++ b/src/gfx/vk/present.cpp
+@@ -35,6 +35,9 @@ layout(set = 0, binding = 1) uniform Gamma {
+   uvec4 toast_text[5];   // "Achievement Unlocked", the name, the suffix: ASCII, a byte each
+   uvec4 toast_font[48];  // ProggyTiny at 10 px, ASCII 32-126: 6x10 bits each (bit y * 6 + x), 2 uints
+   uvec4 toast_icon[484]; // 44x44 RGBA8
++  uvec4 hint;            // x: opacity (float bits, 0 = none), y: width, z: height (image pixels = 1080p pixels)
++  vec4 hint_at;          // xy: top-left in pixels of a 1920x1080 picture
++  uvec4 hint_image[1920]; // up to 160x48 RGBA8, row by row, width hint.y
+ };
+ layout(location = 0) out vec4 result;
+ 
+@@ -229,6 +232,34 @@ vec4 Toast(vec2 pixel, vec4 color) {
+   return vec4(mix(c, ink, a), color.a);
+ }
+ 
++// Menu hint (eatlead): a small image the game asks for (--menu_hint, e.g. "B Quit" on the main menu), drawn over the
++// picture at hint_at in 1080p pixels of a 16:9 frame, scaled with the output and filtered bilinearly; hint.x fades it.
++vec4 HintTexel(ivec2 t) {
++  ivec2 size = ivec2(hint.yz);
++  if (t.x < 0 || t.y < 0 || t.x >= size.x || t.y >= size.y) return vec4(0.0);
++  uint i = uint(t.y * size.x + t.x);
++  return unpackUnorm4x8(hint_image[i >> 2u][i & 3u]);
++}
++
++vec4 Hint(vec2 pixel, vec4 color) {
++  float a = uintBitsToFloat(hint.x);
++  vec2 out_size = vec2(textureSize(source, 0).xy) / render_scale.xx;
++  float s = out_size.y / 1080.0;
++  vec2 origin = vec2((out_size.x - 1920.0 * s) * 0.5, 0.0);  // a wider output centres the 16:9 frame
++  vec2 p = (pixel - origin) / s - hint_at.xy;  // hint image pixels
++  if (p.x < -1.0 || p.y < -1.0 || p.x > float(hint.y) + 1.0 || p.y > float(hint.z) + 1.0) return color;
++  vec2 q = p - 0.5;
++  ivec2 t = ivec2(floor(q));
++  vec2 f = q - vec2(t);
++  vec4 c00 = HintTexel(t), c10 = HintTexel(t + ivec2(1, 0)), c01 = HintTexel(t + ivec2(0, 1)),
++       c11 = HintTexel(t + ivec2(1, 1));
++  // premultiplied, so transparent texels don't darken the edges
++  vec4 p00 = vec4(c00.rgb * c00.a, c00.a), p10 = vec4(c10.rgb * c10.a, c10.a), p01 = vec4(c01.rgb * c01.a, c01.a),
++       p11 = vec4(c11.rgb * c11.a, c11.a);
++  vec4 m = mix(mix(p00, p10, f.x), mix(p01, p11, f.x), f.y);
++  return vec4(color.rgb * (1.0 - m.a * a) + m.rgb * a, color.a);
++}
++
+ void main() {
+   // Output pixel centres -> source texels (the front buffer is render_scale.x of the output's size; 1 above render
+   // scale 1, where the output is the rendered size). At 1 that is each texel's centre, read as is; below 1 it
+@@ -245,6 +276,7 @@ void main() {
+   float brightness = uintBitsToFloat(text_layout.w);
+   if (brightness > 0.0 && brightness != 1.0) result.rgb = pow(result.rgb, vec3(1.0 / brightness));
+   if (text_layout.x != 0u) result = TextOverlay(gl_FragCoord.xy, result);
++  if (uintBitsToFloat(hint.x) > 0.0) result = Hint(gl_FragCoord.xy, result);
+   if (uintBitsToFloat(toast.x) > 0.0) result = Toast(gl_FragCoord.xy, result);
+ }
+ )";
+@@ -299,7 +331,8 @@ constexpr VkFormat kGuestOutputFormat = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+ // icon)
+ constexpr VkDeviceSize kOverlayBytes = 10 * 16 + 16 + 8 * 16;
+ constexpr VkDeviceSize kToastBytes = 16 + 5 * 16 + 48 * 16 + 484 * 16;
+-constexpr VkDeviceSize kRampBytes = 256 * 4 + 16 + kOverlayBytes + kToastBytes;
++constexpr VkDeviceSize kHintBytes = 16 + 16 + 1920 * 16;
++constexpr VkDeviceSize kRampBytes = 256 * 4 + 16 + kOverlayBytes + kToastBytes + kHintBytes;
+ 
+ }  // namespace
+ 
+@@ -377,6 +410,19 @@ void Renderer::SetToast(float alpha, const std::string& name, const std::string&
+   if (icon) std::memcpy(toast_icon_, icon, sizeof(toast_icon_));
+ }
+ 
++void Renderer::SetHint(float alpha, float x, float y, uint32_t width, uint32_t height, const uint32_t* rgba) {
++  if (!rgba || width == 0 || height == 0 || width > kHintMaxWidth || height > kHintMaxHeight || width * height > kHintTexels) {
++    hint_alpha_ = 0.0f;
++    return;
++  }
++  hint_alpha_ = alpha;
++  hint_x_ = x;
++  hint_y_ = y;
++  hint_width_ = width;
++  hint_height_ = height;
++  std::memcpy(hint_image_, rgba, size_t(width) * height * 4);
++}
++
+ void Renderer::AddFrameTime(double ms) {
+   overlay_graph_ = true;
+   frame_times_[frame_time_head_] = uint8_t(std::clamp(ms * 4.0 + 0.5, 0.0, 255.0));
+@@ -486,6 +532,12 @@ bool Renderer::Present(uint32_t address, VkImage target, VkImageView target_view
+   std::memcpy(toast + 16, toast_text_, sizeof(toast_text_));
+   std::memcpy(toast + 16 + sizeof(toast_text_), kToastFont, sizeof(kToastFont));
+   std::memcpy(toast + 16 + sizeof(toast_text_) + sizeof(kToastFont), toast_icon_, sizeof(toast_icon_));
++  uint8_t* hint = toast + kToastBytes;
++  const uint32_t hint_header[4] = {std::bit_cast<uint32_t>(hint_alpha_), hint_width_, hint_height_, 0u};
++  const float hint_at[4] = {hint_x_, hint_y_, 0.0f, 0.0f};
++  std::memcpy(hint, hint_header, 16);
++  std::memcpy(hint + 16, hint_at, 16);
++  if (hint_alpha_ > 0.0f) std::memcpy(hint + 32, hint_image_, sizeof(hint_image_));
+   const VkDescriptorSet set = AllocateSet(present_set_layout_);
+   if (!set) {
+     static bool warned = false;
+diff --git a/src/gfx/vk/renderer.h b/src/gfx/vk/renderer.h
+index 83049a2..dcf9d97 100644
+--- a/src/gfx/vk/renderer.h
++++ b/src/gfx/vk/renderer.h
+@@ -350,6 +350,11 @@ class Renderer : public Pm4Sink {
+   uint32_t toast_name_length_ = 0, toast_suffix_length_ = 0;
+   bool toast_has_icon_ = false;
+   uint32_t toast_icon_[44 * 44] = {};
++  // SetHint (eatlead): the menu hint image, up to 160x48 (7680 texels)
++  static constexpr uint32_t kHintMaxWidth = 160, kHintMaxHeight = 48, kHintTexels = 7680;
++  float hint_alpha_ = 0.0f, hint_x_ = 0.0f, hint_y_ = 0.0f;
++  uint32_t hint_width_ = 0, hint_height_ = 0;
++  uint32_t hint_image_[kHintTexels] = {};
+   uint32_t Host(uint32_t v) const { return scale_ == 1.0f ? v : uint32_t(float(v) * scale_ + 0.5f); }
+   int32_t Host(int32_t v) const { return int32_t(Host(uint32_t(std::max(v, 0)))); }
+   bool ReadImage(const Image& image, std::vector<uint8_t>& rgb, uint32_t& width, uint32_t& height);
+@@ -405,6 +410,8 @@ class Renderer : public Pm4Sink {
+   // tbc: the achievement pop-up the present pass draws in the bottom-right corner, at opacity alpha (0: none): its name, the
+   // grey text after it (" (20G)") and its icon (44x44 RGBA8, or null).
+   void SetToast(float alpha, const std::string& name, const std::string& suffix, const uint32_t* icon);
++  // eatlead: an image (RGBA8, width x height, at most 160x48) at (x, y) in 1080p pixels of a 16:9 frame; alpha 0: none.
++  void SetHint(float alpha, float x, float y, uint32_t width, uint32_t height, const uint32_t* rgba);
+   enum GpuCat : uint8_t { kGpuDraw, kGpuResolve, kGpuUpload, kGpuTexture, kGpuTransfer, kGpuPresent, kGpuOther };
+   static constexpr const char* kGpuCatNames[] = {"draw", "resolve", "upload", "texture", "transfer", "present",
+                                                  "other"};
