@@ -23,6 +23,7 @@ set(EATLEAD_SOURCES
     src/achievement_list.cpp
     src/menu_trace.cpp
     src/menu_quit.cpp
+    src/pad_prompts.cpp
 )
 
 if(WIN32)

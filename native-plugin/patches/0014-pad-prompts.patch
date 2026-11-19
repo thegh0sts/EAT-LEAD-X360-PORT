@@ -1,0 +1,360 @@
+diff --git a/src/gfx/native.cpp b/src/gfx/native.cpp
+index d8fc080..349103b 100644
+--- a/src/gfx/native.cpp
++++ b/src/gfx/native.cpp
+@@ -137,6 +137,8 @@ class NativeCommandProcessor final : public rg::CommandProcessor {
+     UpdateFpsOverlay();
+     UpdateToast();
+     UpdateHint();
++    // eatlead: the buttons the game's button textures show (prompt_atlas.h); 0 if the game doesn't have the setting.
++    renderer_->set_pad_prompt_mode(uint32_t(std::max(0, rex::cvar::Query<int32_t>("pad_prompts_active"))));
+     // tbc: --brightness (the game's setting, through the shared cvar registry; 0 if the game doesn't have it).
+     static const float brightness = float(rex::cvar::Query<double>("brightness"));
+     if (brightness > 0.0f) renderer_->set_brightness(brightness);
+diff --git a/src/gfx/prompt_atlas.cpp b/src/gfx/prompt_atlas.cpp
+index c920c5a..f5efdfd 100644
+--- a/src/gfx/prompt_atlas.cpp
++++ b/src/gfx/prompt_atlas.cpp
+@@ -5,9 +5,17 @@
+ #include <array>
+ #include <cctype>
+ #include <cstdio>
++#include <cstring>
+ #include <string>
+ #include <string_view>
+ #include <unordered_map>
++#include <filesystem>
++#include <fstream>
++#include <sstream>
++#include <cmath>
++#include <vector>
++
++#include <rex/logging.h>
+ 
+ #include <rex/cvar.h>
+ 
+@@ -229,4 +237,194 @@ std::vector<uint8_t> BuildButtonAtlas(PromptDevice device) {
+   }
+ }
+ 
++// --- eatlead: PlayStation buttons over the game's own Xbox button textures (prompts/playstation.txt) ---
++
++namespace {
++
++struct PadDraw {
++  int x0, y0, x1, y1;
++  std::string image;
++  bool stretch = false, clear = false;
++};
++
++struct PadSheet {
++  std::string name;
++  uint32_t width = 0, height = 0;
++  uint64_t hash = 0;
++  std::vector<PadDraw> draws;
++};
++
++struct PadImage {
++  int width = 0, height = 0;
++  std::vector<uint8_t> rgba;
++};
++
++struct PadConfig {
++  std::vector<PadSheet> sheets;
++  std::unordered_map<std::string, PadImage> images;
++};
++
++const PadConfig& Config() {
++  static const PadConfig config = [] {
++    PadConfig c;
++    for (const char* dir : {"prompts", "assets/prompts"}) {
++      std::ifstream file(std::filesystem::path(dir) / "playstation.txt");
++      if (!file) continue;
++      std::string line;
++      while (std::getline(file, line)) {
++        std::istringstream in(line);
++        std::string word;
++        if (!(in >> word) || word[0] == '#') continue;
++        if (word == "texture") {
++          PadSheet sheet;
++          std::string hash;
++          if (in >> sheet.name >> sheet.width >> sheet.height >> hash) {
++            sheet.hash = std::strtoull(hash.c_str(), nullptr, 16);
++            c.sheets.push_back(std::move(sheet));
++          }
++        } else if (word == "draw" && !c.sheets.empty()) {
++          PadDraw draw;
++          std::string mode, extra;
++          if (!(in >> draw.x0 >> draw.y0 >> draw.x1 >> draw.y1 >> draw.image >> mode)) continue;
++          draw.stretch = mode == "stretch";
++          while (in >> extra) draw.clear |= extra == "clear";
++          c.sheets.back().draws.push_back(draw);
++          if (draw.image == "-") {
++            c.images.emplace(draw.image, PadImage{});  // clear only
++          } else if (!c.images.count(draw.image)) {
++            std::ifstream png(std::filesystem::path(dir) / (draw.image + ".png"), std::ios::binary);
++            const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(png)), std::istreambuf_iterator<char>());
++            PadImage image;
++            int n = 0;
++            if (stbi_uc* rgba = bytes.empty() ? nullptr
++                                              : stbi_load_from_memory(bytes.data(), int(bytes.size()), &image.width,
++                                                                      &image.height, &n, 4)) {
++              // Cropped to what isn't transparent, so "fit" sizes the button itself, not its margins.
++              int x0 = image.width, y0 = image.height, x1 = -1, y1 = -1;
++              for (int y = 0; y < image.height; ++y)
++                for (int x = 0; x < image.width; ++x)
++                  if (rgba[(size_t(y) * image.width + x) * 4 + 3] > 8)
++                    x0 = std::min(x0, x), y0 = std::min(y0, y), x1 = std::max(x1, x), y1 = std::max(y1, y);
++              if (x1 >= x0) {
++                const int w = x1 - x0 + 1, h = y1 - y0 + 1;
++                image.rgba.resize(size_t(w) * h * 4);
++                for (int y = 0; y < h; ++y)
++                  std::memcpy(&image.rgba[size_t(y) * w * 4], &rgba[(size_t(y + y0) * image.width + x0) * 4],
++                              size_t(w) * 4);
++                image.width = w, image.height = h;
++              }
++              stbi_image_free(rgba);
++            } else {
++              REXLOG_WARN("pad prompts: {}/{}.png didn't load", dir, draw.image);
++            }
++            c.images.emplace(draw.image, std::move(image));
++          }
++        }
++      }
++      REXLOG_INFO("pad prompts: {}/playstation.txt: {} textures, {} images", dir, c.sheets.size(), c.images.size());
++      break;
++    }
++    return c;
++  }();
++  return config;
++}
++
++// Byte offset of texel (x, y) in a tiled 2D texture, pitch in texels (a multiple of 32), 2^log2_bpp bytes a texel.
++uint32_t TiledOffset(uint32_t x, uint32_t y, uint32_t pitch, uint32_t log2_bpp) {
++  const uint32_t macro = ((x >> 5) + (y >> 5) * (pitch >> 5)) << (log2_bpp + 7);
++  const uint32_t micro = ((x & 7) + ((y & 0xE) << 2)) << log2_bpp;
++  const uint32_t offset = macro + ((micro & ~0xFu) << 1) + (micro & 0xF) + ((y & 1) << 4);
++  return ((offset & ~0x1FFu) << 3) + ((y & 16) << 7) + ((offset & 0x1C0) << 2) +
++         (((((y & 8) >> 2) + (x >> 3)) & 3) << 6) + (offset & 0x3F);
++}
++
++std::vector<uint8_t> Untile(const uint8_t* guest, uint32_t width, uint32_t height) {
++  std::vector<uint8_t> rgba(size_t(width) * height * 4);
++  const uint32_t pitch = (width + 31) & ~31u;
++  for (uint32_t y = 0; y < height; ++y) {
++    for (uint32_t x = 0; x < width; ++x) {
++      const uint8_t* p = guest + TiledOffset(x, y, pitch, 2);  // A R G B
++      uint8_t* q = &rgba[(size_t(y) * width + x) * 4];
++      q[0] = p[1], q[1] = p[2], q[2] = p[3], q[3] = p[0];
++    }
++  }
++  return rgba;
++}
++
++// image over out's rect (x0, y0)-(x1, y1): stretched to it, or fitted (aspect kept, centred). Each pixel averages
++// 4x4 samples of the image, premultiplied.
++void Paint(const PadImage& image, const PadDraw& d, uint32_t width, uint32_t height, std::vector<uint8_t>& out) {
++  float w = float(d.x1 - d.x0), h = float(d.y1 - d.y0), ox = float(d.x0), oy = float(d.y0);
++  if (!d.stretch && image.width > 0 && image.height > 0) {
++    const float k = std::min(w / image.width, h / image.height);
++    ox += (w - image.width * k) * 0.5f, oy += (h - image.height * k) * 0.5f;
++    w = image.width * k, h = image.height * k;
++  }
++  if (d.clear) {
++    for (int y = std::max(d.y0, 0); y < std::min(d.y1, int(height)); ++y)
++      for (int x = std::max(d.x0, 0); x < std::min(d.x1, int(width)); ++x) {
++        uint8_t* q = &out[(size_t(y) * width + x) * 4];
++        q[0] = q[1] = q[2] = 255, q[3] = 0;  // the sheets' transparent texels are white
++      }
++  }
++  if (image.rgba.empty() || w <= 0 || h <= 0) return;
++  for (int y = std::max(int(std::floor(oy)), 0); y < std::min(int(std::ceil(oy + h)), int(height)); ++y) {
++    for (int x = std::max(int(std::floor(ox)), 0); x < std::min(int(std::ceil(ox + w)), int(width)); ++x) {
++      float r = 0, g = 0, b = 0, a = 0;
++      for (int sy = 0; sy < 4; ++sy) {
++        for (int sx = 0; sx < 4; ++sx) {
++          const float u = (x + (sx + 0.5f) / 4 - ox) / w, v = (y + (sy + 0.5f) / 4 - oy) / h;
++          if (u < 0 || v < 0 || u >= 1 || v >= 1) continue;
++          const uint8_t* p = &image.rgba[(size_t(int(v * image.height)) * image.width + int(u * image.width)) * 4];
++          const float pa = p[3] / 255.0f;
++          r += p[0] * pa, g += p[1] * pa, b += p[2] * pa, a += pa;
++        }
++      }
++      if (a <= 0) continue;
++      uint8_t* q = &out[(size_t(y) * width + x) * 4];
++      const float sa = a / 16.0f, da = q[3] / 255.0f * (1 - sa), oa = sa + da;
++      for (int c = 0; c < 3; ++c) {
++        const float src = (c == 0 ? r : c == 1 ? g : b) / 16.0f;  // premultiplied
++        q[c] = uint8_t(std::clamp((src + q[c] * da) / std::max(oa, 1e-6f), 0.0f, 255.0f) + 0.5f);
++      }
++      q[3] = uint8_t(std::clamp(oa * 255.0f + 0.5f, 0.0f, 255.0f));
++    }
++  }
++}
++
++}  // namespace
++
++bool PadSheetSize(uint32_t width, uint32_t height) {
++  for (const PadSheet& s : Config().sheets)
++    if (s.width == width && s.height == height) return true;
++  return false;
++}
++
++int FindPadSheet(const uint8_t* guest, uint32_t width, uint32_t height) {
++  const auto& sheets = Config().sheets;
++  const uint64_t hash = Hash(guest, size_t(width) * height * 4);
++  for (size_t i = 0; i < sheets.size(); ++i)
++    if (sheets[i].width == width && sheets[i].height == height && sheets[i].hash == hash) return int(i);
++  static int logged = 0;  // what didn't match, for a new sheet or another release of the game
++  if (logged < 16) {
++    ++logged;
++    REXLOG_INFO("pad prompts: a {}x{} ARGB texture, hash {:016X}, isn't described", width, height, hash);
++  }
++  return -1;
++}
++
++std::vector<uint8_t> BuildPadSheet(int sheet, const uint8_t* guest) {
++  const auto& config = Config();
++  if (sheet < 0 || size_t(sheet) >= config.sheets.size()) return {};
++  const PadSheet& s = config.sheets[sheet];
++  std::vector<uint8_t> out = Untile(guest, s.width, s.height);
++  for (const PadDraw& d : s.draws) Paint(config.images.at(d.image), d, s.width, s.height, out);
++  static std::unordered_map<int, bool> logged;
++  if (!logged[sheet]) {
++    logged[sheet] = true;
++    REXLOG_INFO("pad prompts: {} shows PlayStation buttons ({} drawn)", s.name, s.draws.size());
++  }
++  return out;
++}
++
+ }  // namespace bots::prompts
+diff --git a/src/gfx/prompt_atlas.h b/src/gfx/prompt_atlas.h
+index 96136ba..0d1ae55 100644
+--- a/src/gfx/prompt_atlas.h
++++ b/src/gfx/prompt_atlas.h
+@@ -29,4 +29,16 @@ inline uint64_t Hash(const uint8_t* data, size_t size) {
+ // keyboard/mouse one from the current bindings. Empty if the glyph sheet failed to load.
+ std::vector<uint8_t> BuildButtonAtlas(PromptDevice device);
+ 
++// eatlead: PlayStation buttons painted over a game's own Xbox button textures, described by a text file the game
++// ships, prompts/playstation.txt (or assets/prompts/ when run from the project folder):
++//   texture <name> <width> <height> <FNV-1a 64 of the base level, hex>
++//   draw <x0> <y0> <x1> <y1> <image|-> <fit|stretch> [clear]   ("-": clear only)
++// for 32-bit (k_8_8_8_8, ARGB) tiled textures; images are prompts/<image>.png. Which buttons to show is the game's
++// int cvar pad_prompts_active (0 Xbox, 1 PlayStation), read by native.cpp each frame.
++bool PadSheetSize(uint32_t width, uint32_t height);  // a described texture has this size
++// The described texture whose base level (tiled, width x height x 4 bytes at guest) matches, or -1.
++int FindPadSheet(const uint8_t* guest, uint32_t width, uint32_t height);
++// Its base level as RGBA8 rows with the PlayStation buttons painted on; empty on failure.
++std::vector<uint8_t> BuildPadSheet(int sheet, const uint8_t* guest);
++
+ }  // namespace bots::prompts
+diff --git a/src/gfx/vk/renderer.h b/src/gfx/vk/renderer.h
+index dcf9d97..588ee0a 100644
+--- a/src/gfx/vk/renderer.h
++++ b/src/gfx/vk/renderer.h
+@@ -299,6 +299,9 @@ class Renderer : public Pm4Sink {
+     // The controller-button atlas (B-105): reloaded when the prompt device changes (PromptState generation).
+     bool prompt_atlas = false;
+     uint32_t prompt_generation = 0;
++    // eatlead: a game's own button texture with PlayStation buttons painted on (prompt_atlas.h, prompts/
++    // playstation.txt): reloaded when pad_prompt_mode_ changes.
++    bool pad_sheet = false;
+   };
+   using TextureCacheKey = std::array<uint32_t, 5>;
+   // Filters (mag, min, mip), clamp modes (x, y, z), border colour, mip range, anisotropy.
+@@ -410,6 +413,8 @@ class Renderer : public Pm4Sink {
+   // tbc: the achievement pop-up the present pass draws in the bottom-right corner, at opacity alpha (0: none): its name, the
+   // grey text after it (" (20G)") and its icon (44x44 RGBA8, or null).
+   void SetToast(float alpha, const std::string& name, const std::string& suffix, const uint32_t* icon);
++  // eatlead: which buttons the game's button textures show (0 Xbox, 1 PlayStation); textures already loaded reload.
++  void set_pad_prompt_mode(uint32_t mode) { pad_prompt_mode_ = mode; }
+   // eatlead: an image (RGBA8, width x height, at most 160x48) at (x, y) in 1080p pixels of a 16:9 frame; alpha 0: none.
+   void SetHint(float alpha, float x, float y, uint32_t width, uint32_t height, const uint32_t* rgba);
+   enum GpuCat : uint8_t { kGpuDraw, kGpuResolve, kGpuUpload, kGpuTexture, kGpuTransfer, kGpuPresent, kGpuOther };
+@@ -633,6 +638,10 @@ class Renderer : public Pm4Sink {
+   VkImageView SwizzledView(Image& image, uint32_t host_swizzle, bool is_signed);
+   void LoadTexture(const rex::graphics::xenos::xe_gpu_texture_fetch_t& fetch, GuestTexture& texture);
+   bool LoadPromptAtlas(GuestTexture& texture, uint32_t address, bots::PromptDevice device);
++  // eatlead: an RGBA8 image (rows) in place of the guest texture at address (bytes long, still watched for writes).
++  bool LoadRgbaTexture(GuestTexture& texture, uint32_t address, uint32_t bytes, const std::vector<uint8_t>& pixels,
++                       uint32_t width, uint32_t height);
++  uint32_t pad_prompt_mode_ = 0;  // eatlead: 0 Xbox, 1 PlayStation (set_pad_prompt_mode)
+   VkSampler GetSampler(const rex::graphics::xenos::xe_gpu_texture_fetch_t& fetch,
+                        const rex::graphics::SpirvShader::SamplerBinding& binding);
+ 
+diff --git a/src/gfx/vk/texture.cpp b/src/gfx/vk/texture.cpp
+index a540210..6f75e23 100644
+--- a/src/gfx/vk/texture.cpp
++++ b/src/gfx/vk/texture.cpp
+@@ -272,8 +272,10 @@ VkImageView Renderer::TextureView(const rg::xenos::xe_gpu_texture_fetch_t& fetch
+     ++stats_.texture_loads;
+     if (!evicted_keys_.empty() && evicted_keys_.erase(key)) ++stats_.texture_loads_evicted;
+     LoadGuestTexture(fetch, *slot);
+-  } else if (slot->dirty || (slot->prompt_atlas && bots::FindPromptState() &&
+-                              slot->prompt_generation != bots::FindPromptState()->generation.load())) {
++  } else if (slot->dirty ||
++             (slot->prompt_atlas && bots::FindPromptState() &&
++              slot->prompt_generation != bots::FindPromptState()->generation.load()) ||
++             (slot->pad_sheet && slot->prompt_generation != pad_prompt_mode_)) {
+     DropGuestTexture(*slot);  // earlier draws of this submission still sample the old contents
+     *slot = GuestTexture{};
+     LoadGuestTexture(fetch, *slot);
+@@ -438,6 +440,21 @@ void Renderer::LoadTexture(const rg::xenos::xe_gpu_texture_fetch_t& fetch, Guest
+       return;
+     }
+   }
++  // eatlead: a described button texture (prompts/playstation.txt) gets the PlayStation buttons while
++  // pad_prompt_mode_ says so.
++  if (depth == 1 && base_page && fetch.tiled && fetch.format == xe::TextureFormat::k_8_8_8_8 &&
++      bots::prompts::PadSheetSize(width, height)) {
++    const uint32_t address = base_page << 12;
++    const int sheet = bots::prompts::FindPadSheet(memory_(address), width, height);
++    if (sheet >= 0) {
++      texture.pad_sheet = true;
++      texture.prompt_generation = pad_prompt_mode_;
++      if (pad_prompt_mode_ == 1) {
++        const std::vector<uint8_t> pixels = bots::prompts::BuildPadSheet(sheet, memory_(address));
++        if (!pixels.empty() && LoadRgbaTexture(texture, address, width * height * 4, pixels, width, height)) return;
++      }
++    }
++  }
+   const BcDecode decode = bc_textures_ ? BcDecode::kNone : BcDecodeFor(host.format);
+   const VkFormat image_format = decode == BcDecode::kNone ? host.format : BcDecodedFormat(decode, pack_bc1_);
+   const uint32_t decoded_bpp = BcDecodedBytesPerTexel(decode, pack_bc1_);
+@@ -595,6 +612,35 @@ bool Renderer::LoadPromptAtlas(GuestTexture& texture, uint32_t address, bots::Pr
+   return true;
+ }
+ 
++bool Renderer::LoadRgbaTexture(GuestTexture& texture, uint32_t address, uint32_t bytes,
++                               const std::vector<uint8_t>& pixels, uint32_t width, uint32_t height) {
++  if (!CreateImage(texture.image, VK_FORMAT_R8G8B8A8_UNORM, width, height, false, VK_IMAGE_VIEW_TYPE_2D_ARRAY, false, 1,
++                   1)) {
++    texture.image = {};
++    return false;
++  }
++  texture.host_format_swizzle = xe::XE_GPU_TEXTURE_SWIZZLE_RGBA;
++  texture.ranges[0] = {address, address + bytes};  // the game replacing it reloads the slot
++  if (tracker_) tracker_->Request(address, bytes);
++  VkDeviceSize offset;
++  uint8_t* staging = Upload(pixels.size(), 16, offset);
++  if (!staging) {
++    Flush();
++    BeginCommands(kGpuTexture);
++    staging = Upload(pixels.size(), 16, offset);
++    if (!staging) return false;
++  }
++  std::memcpy(staging, pixels.data(), pixels.size());
++  VkBufferImageCopy region{};
++  region.bufferOffset = offset;
++  region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++  region.imageExtent = {width, height, 1};
++  vk_.vkCmdCopyBufferToImage(cmd_, ring_.buffer, texture.image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
++  Barrier();
++  ++stats_.textures;
++  return true;
++}
++
+ VkSampler Renderer::GetSampler(const rg::xenos::xe_gpu_texture_fetch_t& fetch,
+                                const rg::SpirvShader::SamplerBinding& binding) {
+   auto pick = [](xe::TextureFilter instruction, xe::TextureFilter constant) {

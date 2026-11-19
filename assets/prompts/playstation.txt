@@ -1,0 +1,31 @@
+# Eat Lead: PlayStation buttons painted over the game's own Xbox button textures by the native renderer
+# (native-plugin/patches/0014-pad-prompts.patch) while a PlayStation pad is in use (--pad_prompts).
+#
+#   texture <name> <width> <height> <FNV-1a 64 of the base level as the game loads it, hex>
+#   draw <x0> <y0> <x1> <y1> <image|-> <fit|stretch> [clear]   ("-": clear only)
+#
+# Images are prompts/<image>.png, our own art. Rectangles were measured on the textures as decoded from the game
+# package (Games/0000000100000001.gam; nothing of the game's is shipped).
+
+# The button sheet: A X B Y, BACK / START, the sticks, LB RB, RT LT, the d-pad.
+texture ui_x360buttons 256 256 8E84D1C36D3C1CB1
+draw 0 0 46 44 cross stretch clear
+draw 48 1 94 45 square stretch clear
+draw 97 1 143 45 circle stretch clear
+draw 146 1 192 45 triangle stretch clear
+draw 0 52 98 64 - fit clear
+draw 2 52 46 64 share_label fit
+draw 48 52 98 64 options_label fit
+draw 0 66 47 92 share fit clear
+draw 50 66 96 92 options fit clear
+draw 0 107 48 129 l1 fit clear
+draw 50 107 96 128 r1 fit clear
+draw 99 98 145 138 r2 fit clear
+draw 147 98 193 138 l2 fit clear
+
+# Button combinations (stick + button).
+texture ui_buttoncombo_360 128 256 4F359CB624F8F60D
+draw 74 7 120 51 triangle stretch clear
+draw 74 54 120 98 square stretch clear
+draw 74 108 122 138 l1 fit clear
+draw 76 149 122 193 circle stretch clear

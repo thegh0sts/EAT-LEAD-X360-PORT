@@ -1,4 +1,4 @@
-# tools/make_hint.py <out dir>: draws the "B Quit" menu hint (our own art, no game assets): a glossy red B button like the game's prompt
+# tools/make_hint.py <out dir> [circle.png]: draws the "B Quit" menu hint (our own art, no game assets): a glossy red B button like the game's prompt
 # buttons and "Quit" in white, at the size the game's "A Select" prompt has at 1080 output lines.
 import sys
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -54,3 +54,7 @@ def hint(btn, text, out):
 
 red = button(((235, 40, 40, 255), (150, 0, 0)), "B", (120, 0, 0, 255))
 hint(red, "Quit", sys.argv[1] + "/b_quit.png")
+# PlayStation: the circle button from assets/prompts/circle.png (our own), at the same size.
+circle = Image.open(sys.argv[2] if len(sys.argv) > 2 else "assets/prompts/circle.png").convert("RGBA")
+circle = circle.resize(((D + 8) * S, (D + 8) * S), Image.LANCZOS)
+hint(circle, "Quit", sys.argv[1] + "/b_quit_ps.png")

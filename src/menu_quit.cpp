@@ -15,7 +15,7 @@
 // always did: nothing is lost. --menu_b_quit=false turns it off.
 //
 // The hint: while the main menu is the screen on top (front end, and every screen opened since it has closed again,
-// for 0.4 s so it doesn't flash during transitions), --menu_hint is set to 1 (b_quit, the first of --menu_hint_images) and the native renderer draws
+// for 0.4 s so it doesn't flash during transitions), --menu_hint is set to 1 (b_quit, the first of --menu_hint_images; 2, b_quit_ps, the circle, with PlayStation prompts) and the native renderer draws
 // assets/hints/b_quit.png ("B Quit", our own art) in the bottom-right corner (native-plugin patch 0013,
 // --menu_hint_pos in 1080p pixels).
 
@@ -35,8 +35,12 @@
 REXCVAR_DEFINE_BOOL(menu_b_quit, true, "UI", "B on the main menu closes the game");
 // Read by the native renderer each frame (native-plugin/patches/0013-menu-hint.patch); set here, not by hand.
 REXCVAR_DEFINE_INT32(menu_hint, 0, "UI", "Menu hint the renderer draws: 0 none, N the Nth of menu_hint_images; set by the game");
-REXCVAR_DEFINE_STRING(menu_hint_images, "b_quit", "UI", "The menu hints' images, hints/<name>.png, comma-separated");
+REXCVAR_DEFINE_STRING(menu_hint_images, "b_quit,b_quit_ps", "UI", "The menu hints' images, hints/<name>.png, comma-separated");
 REXCVAR_DEFINE_STRING(menu_hint_pos, "1702,982", "UI", "Where the menu hint goes: x,y in 1080p pixels of the picture");
+
+namespace eatlead::pad_prompts {
+bool PlayStation();  // pad_prompts.cpp
+}  // namespace eatlead::pad_prompts
 
 namespace {
 
@@ -110,7 +114,7 @@ void OnPad(uint16_t pressed) {
     std::lock_guard<std::mutex> lock(s.mutex);
     const auto now = Clock::now();
     const bool on_top = s.front_end && !s.submenu && !s.quitting && now - s.changed >= std::chrono::milliseconds(400);
-    const int32_t hint = on_top ? 1 : 0;
+    const int32_t hint = !on_top ? 0 : eatlead::pad_prompts::PlayStation() ? 2 : 1;  // b_quit / b_quit_ps
     if (REXCVAR_GET(menu_hint) != hint) REXCVAR_SET(menu_hint, hint);
     if (s.pending && now - s.pressed >= kWait && !s.quitting) {
       s.pending = false;
