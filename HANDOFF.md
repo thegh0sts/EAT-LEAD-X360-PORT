@@ -51,6 +51,8 @@ Update this file at the end of each working session. Started 2026-11-19.
   1/29.97 s (0x82001E50) and 20, into the frame time global 0x824114A8 (double) and 0x824B4C40 (int). With
   `--frame_rate=60` the 60 values are stored after that function and before every Swap. Only 30 and 60 are
   right; other rates run the game at rate/30 speed. Confirmed in game: normal speed at 60.
+- **Higher resolution** works with the native renderer: `BOTS_GFX_RENDER_SCALE=2` (2560x1440) looked right in
+  the first level (2026-11-19), the two tiles included. 1.5 (1080p) and 3 (4K) not tried yet.
 - **FPS counter**: `--show_fps` (and `--show_fps_detail`, `--brightness`, `--achievement_popups`), drawn by the
   native renderer as in Bourne.
 - **Repository**: thegh0sts/EAT-LEAD-X360-PORT (first commit from the cloud workspace, 2026-11-19).
