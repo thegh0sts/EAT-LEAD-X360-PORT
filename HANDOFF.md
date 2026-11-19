@@ -82,7 +82,8 @@ Update this file at the end of each working session. Started 2026-11-19.
    - **Native renderer only.** The launcher has no renderer choice; `gpu_plugin` stays in the config
      for testing (`--gpu_plugin xenos`). Achievement pop-ups are unaffected: the native renderer draws
      them (patch 0006), as in Bourne.
-   - **Controller only.** No keyboard and mouse; the Controls tab has deadzone, vibration and invert Y.
+   - **Controller only.** No keyboard and mouse; the Controls tab has deadzone, vibration, invert Y and Button
+     prompts: Auto / PlayStation only / Xbox only (`--pad_prompts=auto|playstation|xbox`).
      Keyboard and mouse only if players ask for it.
    - `src/achievement_list.cpp` (from Bourne) writes the achievement list and icons for the launcher's
      Achievements tab.
