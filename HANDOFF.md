@@ -66,7 +66,8 @@ Update this file at the end of each working session. Started 2026-11-19.
 
 0. Done today: steps 1-4 below, plus 60 FPS. Now: **launcher and installer** (adapted from Bourne's
    `installer/`: install from the player's disc image, build, settings incl. frame rate 30/60, renderer,
-   resolution, FXAA, texture filtering). Later: keyboard and mouse, play further (controls, `.wmv` intros,
+   resolution, FXAA, texture filtering, and the FPS counter as Off / Simple / Detailed with everything
+   the native overlay draws: frame rate and times, GPU, CPU, RAM/VRAM, clock, frame graph, achievement pop-ups). Later: keyboard and mouse, play further (controls, `.wmv` intros,
    saving, other levels), the Xenos blank screen.
 
 1. **Code generation on the PC** (x64 Native Tools prompt, in the project folder):
