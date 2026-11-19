@@ -53,6 +53,13 @@ Update this file at the end of each working session. Started 2026-11-19.
   right; other rates run the game at rate/30 speed. Confirmed in game: normal speed at 60.
 - **Higher resolution** works with the native renderer: `BOTS_GFX_RENDER_SCALE=2` (2560x1440) and 3 (3840x2160)
   looked right in the first level (2026-11-19), the two tiles included. The launcher offers 1x to 3x, as Bourne's.
+- **B quits from the main menu** (`src/menu_quit.cpp`, hooks in `src/menu_trace.cpp`; `--menu_b_quit=false` off).
+  Confirmed in game 2026-11-19. Menu screens open/close through the "UI Show Dialog" / "UI Hide Dialog" script
+  actions (run method: sub_82259630 / sub_82259258). The main menu's Show action is the object at 0xF3AC0958 and
+  the loading screen's at 0xF5D8B13C, the same in every run; between them is the front end, where a B press that
+  opens or closes no screen within 150 ms closes the window (B does nothing on the console's main menu).
+  `--menu_trace=true` logs the actions, button presses (XInputGetState is sub_82268C50) and sub_82269408's file
+  opens (which never ran: regions load another way). Screen names weren't found in the action objects.
 - **FPS counter**: `--show_fps` (and `--show_fps_detail`, `--brightness`, `--achievement_popups`), drawn by the
   native renderer as in Bourne.
 - **Repository**: thegh0sts/EAT-LEAD-X360-PORT (first commit from the cloud workspace, 2026-11-19).
