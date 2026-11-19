@@ -64,7 +64,7 @@ Update this file at the end of each working session. Started 2026-11-19.
   scale 1. The deferred lights find their G-buffer texels from the pixel position (vPos, ps_param_gen), which the
   SDK's translator gave in host pixels: Skullburglar's SDK patch 0003 adds `Features::render_scale` (the native
   renderer sets it) but only its patch 0015, not applied, used it. `tools/sdk-patches/0012-pixel-position-scale`
-  maps each host pixel centre back to guest pixels (SDK patch tag own12). Waiting for a test at 1440p/4K.
+  maps each host pixel centre back to guest pixels (SDK patch tag own12). Confirmed fixed at 4K (2026-11-19).
 - **FPS counter**: `--show_fps` (and `--show_fps_detail`, `--brightness`, `--achievement_popups`), drawn by the
   native renderer as in Bourne.
 - **Repository**: thegh0sts/EAT-LEAD-X360-PORT (first commit from the cloud workspace, 2026-11-19).
