@@ -10,6 +10,10 @@
 // frame while active), the dialog that reference resolves to, and the dialog's first words and any text it
 // leads to. Run with --menu_trace=true, open the main menu, go into Options and back, press B on the main
 // menu, start a level, then read eatlead.log.
+//
+// The controller too: sub_82268C50 is the game's XInputGetState(user, state*), calling XamInputGetState(user, 1,
+// state); each change of the buttons is logged with their names (B = 0x2000), so a press that opens or closes
+// nothing still shows.
 
 #include "generated/default/eatlead_pch.h"
 
@@ -188,4 +192,37 @@ extern "C" REX_FUNC(sub_82259258) {
 extern "C" REX_FUNC(sub_822459A8) {
   __imp__sub_822459A8(ctx, base);
   if (g_action && REXCVAR_GET(menu_trace)) Resolved(ctx.r3.u32, base);
+}
+
+namespace {
+std::string ButtonNames(uint16_t b) {
+  static constexpr struct { uint16_t bit; const char* name; } kNames[] = {
+      {0x0001, "Up"},   {0x0002, "Down"}, {0x0004, "Left"},  {0x0008, "Right"}, {0x0010, "Start"}, {0x0020, "Back"},
+      {0x0040, "LS"},   {0x0080, "RS"},   {0x0100, "LB"},    {0x0200, "RB"},    {0x1000, "A"},     {0x2000, "B"},
+      {0x4000, "X"},    {0x8000, "Y"}};
+  std::string out;
+  for (const auto& n : kNames) {
+    if (!(b & n.bit)) continue;
+    if (!out.empty()) out += "+";
+    out += n.name;
+  }
+  return out.empty() ? "none" : out;
+}
+}  // namespace
+
+REX_EXTERN(__imp__sub_82268C50);
+
+// XInputGetState(user, state*): the XINPUT_STATE is big-endian, buttons at +4.
+extern "C" REX_FUNC(sub_82268C50) {
+  const uint32_t user = ctx.r3.u32;
+  const uint32_t state = ctx.r4.u32;
+  __imp__sub_82268C50(ctx, base);
+  if (!REXCVAR_GET(menu_trace) || user > 3 || !state || ctx.r3.u32 != 0) return;  // 0 = ERROR_SUCCESS
+  static uint16_t last[4] = {};
+  const uint16_t buttons = uint16_t(base[state + 4] << 8 | base[state + 5]);
+  std::lock_guard<std::mutex> lock(Mutex());
+  if (buttons == last[user]) return;
+  const uint16_t pressed = buttons & ~last[user];
+  last[user] = buttons;
+  if (pressed) REXLOG_INFO("menu_trace: pad {} pressed {} (held {})", user, ButtonNames(pressed), ButtonNames(buttons));
 }
