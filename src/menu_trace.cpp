@@ -171,7 +171,7 @@ void OnHide(uint32_t action);
 void OnPad(uint16_t pressed);
 }  // namespace eatlead::menu_quit
 namespace eatlead::pad_prompts {  // pad_prompts.cpp: PlayStation buttons with a PlayStation pad
-void Update();
+void Update(uint8_t* base);
 }  // namespace eatlead::pad_prompts
 
 REX_EXTERN(__imp__sub_82259630);
@@ -240,7 +240,7 @@ extern "C" REX_FUNC(sub_82268C50) {
     pressed = buttons & ~last[user];
     last[user] = buttons;
   }
-  eatlead::pad_prompts::Update();
+  eatlead::pad_prompts::Update(base);
   eatlead::menu_quit::OnPad(pressed);
   if (pressed && REXCVAR_GET(menu_trace))
     REXLOG_INFO("menu_trace: pad {} pressed {} (held {})", user, ButtonNames(pressed), ButtonNames(buttons));
