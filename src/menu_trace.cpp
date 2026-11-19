@@ -3,13 +3,17 @@
 // The menus are scripted: a screen opens and closes through two script actions, "UI Show Dialog"
 // (gcDoUIShowDialog, vtable 0x820137A0, 164-byte object, made by sub_82214960) and "UI Hide Dialog"
 // (gcDoUIHideDialog, vtable 0x820135C0, 136 bytes, sub_82214440). Which of their methods does the work, and
-// where the dialog's name sits, aren't known yet, so this logs every call of the methods the two classes
-// don't share with other actions (vtable slots 4, 5, 11, 16 and 17), with any text the object leads to
-// within two pointers (the dialog's name, e.g. DG_Options). Run with --menu_trace=true, open the main menu,
-// go into Options and back, press B on the main menu, start a level, then read eatlead.log.
+// where the dialog's name sits, aren't fully known. First run (2026-11-19): slots 5 and 11 run only while a
+// region loads (reading and setting up the actions) and slots 4, 16, 17 never did, so the work is in slot 13:
+// sub_82259630 (show) and sub_82259258 (hide). Both resolve their dialog through sub_822459A8 (a reference at
+// +76 in the show action). This logs each run of slot 13 (once per action per second: they may run every
+// frame while active), the dialog that reference resolves to, and the dialog's first words and any text it
+// leads to. Run with --menu_trace=true, open the main menu, go into Options and back, press B on the main
+// menu, start a level, then read eatlead.log.
 
 #include "generated/default/eatlead_pch.h"
 
+#include <chrono>
 #include <cstdio>
 #include <mutex>
 #include <set>
@@ -88,40 +92,83 @@ void Strings(const uint8_t* base, uint32_t at, uint32_t size, int depth, std::st
   }
 }
 
-void Log(const char* what, int slot, const PPCContext& ctx, uint8_t* base) {
+std::string Dump(const uint8_t* base, uint32_t a, uint32_t size) {
+  std::string out;
+  char buf[16];
+  for (uint32_t i = 0; i < size; i += 4) {
+    std::snprintf(buf, sizeof(buf), " %08X", Load32(base, a + i));
+    out += buf;
+  }
+  return out;
+}
+
+std::mutex& Mutex() {
+  static std::mutex m;
+  return m;
+}
+
+thread_local const char* g_action = nullptr;  // "Show" / "Hide" while slot 13 runs
+thread_local uint32_t g_object = 0;
+
+void Run(const char* what, const PPCContext& ctx) {
   if (!REXCVAR_GET(menu_trace)) return;
-  static std::mutex mutex;
-  std::lock_guard<std::mutex> lock(mutex);
+  using clock = std::chrono::steady_clock;
+  static std::unordered_map<uint32_t, clock::time_point> last;
+  std::lock_guard<std::mutex> lock(Mutex());
   const uint32_t obj = ctx.r3.u32;
-  if (slot >= 16) {  // small methods, possibly called every frame: once per object
-    static std::set<uint64_t> logged;
-    if (!logged.insert(uint64_t(slot) << 32 | obj).second) return;
-  }
+  const auto now = clock::now();
+  auto it = last.find(obj);
+  const bool fresh = it == last.end() || now - it->second > std::chrono::seconds(1);
+  last[obj] = now;
+  if (fresh) REXLOG_INFO("menu_trace: {} runs, action {:08X}", what, obj);
+}
+
+void Resolved(uint32_t dialog, uint8_t* base) {
+  static std::set<uint64_t> pairs;
+  static std::set<uint32_t> dumped;
+  std::lock_guard<std::mutex> lock(Mutex());
+  if (!pairs.insert(uint64_t(g_object) << 32 | dialog).second) return;
   std::string text;
-  if (Pointer(obj)) {
+  if (Pointer(dialog) && dumped.insert(dialog).second) {
     std::set<uint32_t> seen;
-    Strings(base, obj, what[0] == 'S' ? 164 : 136, 2, "", seen, text);
+    Strings(base, dialog, 0x100, 2, "", seen, text);
+    text = "\n    words" + Dump(base, dialog, 0x80) + "\n    text" + text;
   }
-  REXLOG_INFO("menu_trace: {} slot {} obj {:08X} r4 {:08X} r5 {:08X}{}", what, slot, obj, ctx.r4.u32, ctx.r5.u32,
-              text);
+  REXLOG_INFO("menu_trace: {} action {:08X} -> dialog {:08X}{}", g_action, g_object, dialog, text);
 }
 
 }  // namespace
 
-#define MENU_HOOK(addr, what, slot)                \
-  REX_EXTERN(__imp__sub_##addr);                   \
-  extern "C" REX_FUNC(sub_##addr) {                \
-    Log(what, slot, ctx, base);                    \
-    __imp__sub_##addr(ctx, base);                  \
-  }
+REX_EXTERN(__imp__sub_82259630);
+REX_EXTERN(__imp__sub_82259258);
+REX_EXTERN(__imp__sub_822459A8);
 
-MENU_HOOK(821F2BA0, "Show", 4)
-MENU_HOOK(821F2C98, "Show", 5)
-MENU_HOOK(821F2E30, "Show", 11)
-MENU_HOOK(821F2E20, "Show", 16)
-MENU_HOOK(821F2E10, "Show", 17)
-MENU_HOOK(821F1290, "Hide", 4)
-MENU_HOOK(821F1358, "Hide", 5)
-MENU_HOOK(821F1498, "Hide", 11)
-MENU_HOOK(821F1488, "Hide", 16)
-MENU_HOOK(821F1478, "Hide", 17)
+// "UI Show Dialog", vtable slot 13.
+extern "C" REX_FUNC(sub_82259630) {
+  Run("Show", ctx);
+  const char* prev = g_action;
+  const uint32_t prev_obj = g_object;
+  g_action = "Show";
+  g_object = ctx.r3.u32;
+  __imp__sub_82259630(ctx, base);
+  g_action = prev;
+  g_object = prev_obj;
+}
+
+// "UI Hide Dialog", vtable slot 13.
+extern "C" REX_FUNC(sub_82259258) {
+  Run("Hide", ctx);
+  const char* prev = g_action;
+  const uint32_t prev_obj = g_object;
+  g_action = "Hide";
+  g_object = ctx.r3.u32;
+  __imp__sub_82259258(ctx, base);
+  g_action = prev;
+  g_object = prev_obj;
+}
+
+// A script reference resolving to its object; logged only inside the two actions above.
+extern "C" REX_FUNC(sub_822459A8) {
+  __imp__sub_822459A8(ctx, base);
+  if (g_action && REXCVAR_GET(menu_trace)) Resolved(ctx.r3.u32, base);
+}
