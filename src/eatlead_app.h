@@ -24,6 +24,12 @@ namespace eatlead {
 void LogVersion();
 }  // namespace eatlead
 
+namespace eatlead::achievements {
+// <user data>/achievements/<title id>-list.json and the icons, for the launcher's Achievements tab
+// (achievement_list.cpp, from the Bourne port).
+void ExportList(rex::Runtime* runtime);
+}  // namespace eatlead::achievements
+
 class EatleadApp : public rex::ReXApp {
  public:
   using rex::ReXApp::ReXApp;
@@ -56,6 +62,8 @@ class EatleadApp : public rex::ReXApp {
     return rex::ReXApp::CreateAchievementNotificationDialog();
   }
 
+  void OnPostSetup() override { eatlead::achievements::ExportList(runtime()); }
+
  private:
   bool native_renderer_ = true;
 
@@ -64,7 +72,6 @@ class EatleadApp : public rex::ReXApp {
   // Other hooks available for customization:
   // void OnLoadXexImage(std::string& xex_image) override {}
   // void OnPostLoadXexImage() override {}
-  // void OnPostSetup() override {}
   // void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {}
   // void OnShutdown() override {}
   // void OnConfigurePaths(rex::PathConfig& paths) override {}

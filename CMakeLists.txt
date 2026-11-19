@@ -20,6 +20,7 @@ set(EATLEAD_SOURCES
     src/version_log.cpp
     src/frame_pacing.cpp
     src/fps_unlock.cpp
+    src/achievement_list.cpp
 )
 
 if(WIN32)
