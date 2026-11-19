@@ -85,6 +85,13 @@ Update this file at the end of each working session. Started 2026-11-19.
 - **Lessons:** stage every file copy to the PC in a new folder (reusing a staging path once left an old file on
   the PC); check the renderer DLL's date next to the exe after an SDK rebuild.
 
+- **Launcher and installer** (`installer/`, 2026-11-19): `EatLead.exe` from the Bourne port's, slimmed to Eat Lead:
+  native renderer only, Display (fullscreen, output and render resolution 1x-3x, FXAA, 30/60, FPS counter,
+  achievement pop-ups), Graphics (brightness, texture filtering), Controls (button prompts Auto / PlayStation only /
+  Xbox only, extra stick dead zone, vibration via `src/vibration.cpp`, B quits), Saves, Achievements, Save settings.
+  `build_installer.bat` packs the SDK built by `tools\build_native.bat` (bundle `el1`). Version 0.1.0. Our own icon.
+  Not run yet (no tkinter in the cloud workspace; the argument building was checked there).
+
 ## Next steps
 
 0. Done today: steps 1-4 below, plus 60 FPS. Now: **launcher and installer** (adapted from Bourne's

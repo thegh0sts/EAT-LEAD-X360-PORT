@@ -1,0 +1,943 @@
+"""
+Eat Lead: The Return of Matt Hazard (Xbox 360) - PC recompilation installer.
+
+Builds the game on the player's own PC from their own disc image:
+  1. reads the Xbox 360 ISO (XDVDFS) and extracts the game files
+  2. checks default.xex is the right game (title ID 445007EB)
+  3. finds or installs Visual Studio Build Tools (C++, Clang, CMake)
+  4. downloads the ReXGlue SDK
+  5. copies in the bundled project files and builds eatlead.exe
+  6. creates a desktop shortcut
+
+No game code or data ships with this installer.
+Only the Python standard library is used, so it packages with PyInstaller.
+"""
+
+import json
+import os
+import queue
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import threading
+import time
+import traceback
+import urllib.request
+import zipfile
+from pathlib import Path
+
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+
+from launcher_text import tr
+
+APP_NAME = "Eat Lead: The Return of Matt Hazard"
+TITLE_ID = 0x445007EB
+SDK_VERSION = "0.10.1"
+SDK_REPO = "rexglue/rexglue-sdk"
+VS_BOOTSTRAPPER = "https://aka.ms/vs/17/release/vs_buildtools.exe"
+PRESET = "win-amd64-relwithdebinfo"
+MIN_FREE_GB = 25
+DEFAULT_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "EatLeadPC"
+LAUNCHER_EXE_NAME = "EatLead"
+
+VS_COMPONENTS = [
+    "Microsoft.VisualStudio.Workload.VCTools",
+    "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+    "Microsoft.VisualStudio.Component.VC.Llvm.Clang",
+    "Microsoft.VisualStudio.Component.VC.Llvm.ClangToolset",
+    "Microsoft.VisualStudio.Component.VC.CMake.Project",
+]
+# Required on an existing install for us to reuse it.
+VS_REQUIRED = [
+    "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+    "Microsoft.VisualStudio.Component.VC.Llvm.Clang",
+    "Microsoft.VisualStudio.Component.VC.CMake.Project",
+]
+
+NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+
+class InstallError(Exception):
+    """An error with a message meant for the player."""
+
+
+def resource_dir() -> Path:
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+
+
+def payload_dir() -> Path:
+    return resource_dir() / "payload"
+
+
+# --------------------------------------------------------------------------
+# XDVDFS (Xbox disc filesystem) reader
+# --------------------------------------------------------------------------
+
+SECTOR = 2048
+XDVDFS_MAGIC = b"MICROSOFT*XBOX*MEDIA"
+# Where the game partition starts inside an ISO: plain/rebuilt, XGD2, XGD3, XGD1.
+PARTITION_OFFSETS = [0, 0xFD90000, 0x2080000, 0x18300000]
+
+
+class XisoReader:
+    def __init__(self, path: Path):
+        self.f = open(path, "rb")
+        self.base = None
+        for off in PARTITION_OFFSETS:
+            self.f.seek(off + 32 * SECTOR)
+            if self.f.read(20) == XDVDFS_MAGIC:
+                self.base = off
+                root_sector, root_size = struct.unpack("<II", self.f.read(8))
+                self.root = (root_sector, root_size)
+                break
+        if self.base is None:
+            self.f.close()
+            raise InstallError(
+                "This doesn't look like an Xbox 360 disc image.\n"
+                "Choose the .iso file you made from your game disc.")
+
+    def close(self):
+        self.f.close()
+
+    def _read(self, sector: int, size: int) -> bytes:
+        self.f.seek(self.base + sector * SECTOR)
+        return self.f.read(size)
+
+    def walk(self, sector=None, size=None, prefix=""):
+        """Yield (relative_path, is_dir, start_sector, file_size)."""
+        if sector is None:
+            sector, size = self.root
+        if size == 0:
+            return
+        table = self._read(sector, size)
+        seen = set()
+        stack = [0]
+        out = []
+        while stack:
+            off = stack.pop()
+            if off in seen or off + 14 > len(table):
+                continue
+            seen.add(off)
+            left, right, start, fsize, attr, nlen = struct.unpack_from("<HHIIBB", table, off)
+            if left == 0xFFFF and right == 0xFFFF:
+                continue  # padding
+            name = table[off + 14: off + 14 + nlen].decode("latin-1")
+            out.append((name, attr, start, fsize))
+            if left:
+                stack.append(left * 4)
+            if right:
+                stack.append(right * 4)
+        for name, attr, start, fsize in sorted(out):
+            rel = f"{prefix}{name}"
+            if attr & 0x10:
+                yield rel, True, start, fsize
+                yield from self.walk(start, fsize, rel + "/")
+            else:
+                yield rel, False, start, fsize
+
+    def extract(self, dest: Path, progress, skip=("$SystemUpdate",), only=None):
+        """Extract the disc (or, with `only`, just those relative paths) into dest."""
+        entries = [e for e in self.walk() if e[0].split("/")[0] not in skip]
+        if only is not None:
+            entries = [e for e in entries if e[0] in only]
+        total = sum(e[3] for e in entries if not e[1]) or 1
+        done = 0
+        for rel, is_dir, start, size in entries:
+            target = dest / rel
+            if is_dir:
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            self.f.seek(self.base + start * SECTOR)
+            with open(target, "wb") as out:
+                left = size
+                while left:
+                    chunk = self.f.read(min(left, 8 << 20))
+                    if not chunk:
+                        raise InstallError(tr("The disc image ends early while reading {file}.\n"
+                                              "It may be incomplete or damaged.", file=rel))
+                    out.write(chunk)
+                    left -= len(chunk)
+                    done += len(chunk)
+                    progress(done / total, rel)
+        return len(entries)
+
+
+def xex_title_id(path: Path) -> int:
+    with open(path, "rb") as f:
+        head = f.read(0x8000)
+    if head[:4] != b"XEX2":
+        raise InstallError(tr("default.xex on this disc isn't a valid Xbox 360 executable."))
+    count = struct.unpack(">I", head[0x14:0x18])[0]
+    for i in range(count):
+        key, val = struct.unpack(">II", head[24 + i * 8: 32 + i * 8])
+        if key == 0x40006:
+            return struct.unpack(">I", head[val + 12: val + 16])[0]
+    raise InstallError(tr("Couldn't read the title ID from default.xex."))
+
+
+# --------------------------------------------------------------------------
+# Tools: Visual Studio Build Tools, ReXGlue SDK
+# --------------------------------------------------------------------------
+
+def vswhere() -> Path:
+    return Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / \
+        "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+
+
+# Visual Studio 2022 (17) and newer: 2019's Clang is too old for the SDK.
+VS_VERSIONS = "[17.0,"
+
+
+def _vswhere_paths(*extra):
+    exe = vswhere()
+    if not exe.exists():
+        return []
+    args = [str(exe), "-products", "*", "-version", VS_VERSIONS, "-sort", "-property", "installationPath", *extra]
+    try:
+        out = subprocess.run(args, capture_output=True, text=True, creationflags=NO_WINDOW).stdout
+    except OSError:
+        return []
+    return [Path(line.strip()) for line in out.splitlines() if line.strip()]
+
+
+def find_vs():
+    # Every instance with all the parts, newest first (-latest would only look at the newest one, and miss a
+    # complete Build Tools next to a newer Visual Studio without Clang).
+    for path in _vswhere_paths("-requires", *VS_REQUIRED):
+        vcvars = path / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
+        if vcvars.exists():
+            return vcvars
+    return None
+
+
+def find_vs_incomplete():
+    """A Visual Studio 2022+ install (Build Tools, Community, ...) that has the C++ build tools' basics but not
+    every part we need: the parts are added to it (setup.exe modify) instead of installing Build Tools beside it.
+    Running the Build Tools bootstrapper with --add where Build Tools is already installed doesn't change that
+    install, which left people with "finished installing but couldn't be found"."""
+    paths = _vswhere_paths()
+    with_msvc = set(_vswhere_paths("-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64"))
+    for path in paths:
+        if path in with_msvc:
+            return path
+    return paths[0] if paths else None
+
+
+def http_get(url: str, accept="application/octet-stream") -> urllib.request.addinfourl:
+    req = urllib.request.Request(url, headers={"User-Agent": "eatlead-recomp-installer", "Accept": accept})
+    return urllib.request.urlopen(req, timeout=60)
+
+
+def download(url: str, dest: Path, progress):
+    with http_get(url) as r:
+        total = int(r.headers.get("Content-Length") or 0)
+        done = 0
+        with open(dest, "wb") as f:
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+                done += len(chunk)
+                if total:
+                    progress(done / total)
+
+
+def find_sdk_asset():
+    api = f"https://api.github.com/repos/{SDK_REPO}/releases"
+    releases = []
+    for tag in (f"v{SDK_VERSION}", SDK_VERSION):
+        try:
+            with http_get(f"{api}/tags/{tag}", "application/vnd.github+json") as r:
+                releases = [json.load(r)]
+                break
+        except Exception:
+            continue
+    if not releases:
+        with http_get(f"{api}?per_page=100", "application/vnd.github+json") as r:
+            releases = [x for x in json.load(r) if SDK_VERSION in (x.get("tag_name", "") + x.get("name", ""))]
+    for rel in releases:
+        for a in rel.get("assets", []):
+            n = a["name"].lower()
+            if n.endswith(".zip") and "win" in n and ("amd64" in n or "x64" in n):
+                return a["browser_download_url"], a["name"]
+    raise InstallError(tr("Couldn't find the ReXGlue SDK {version} for Windows on GitHub.", version=SDK_VERSION))
+
+
+def bundled_sdk():
+    """The SDK zip packed into this installer by build_installer.bat, if any: our own build
+    with AMD FidelityFX (FSR/CAS) and Skullburglar's performance patches (tools/build_sdk.bat)."""
+    folder = payload_dir() / "sdk"
+    zips = sorted(folder.glob("*.zip")) if folder.is_dir() else []
+    return zips[0] if zips else None
+
+
+def find_sdk_root(folder: Path):
+    for cfg in folder.rglob("rexglue-config.cmake"):
+        # .../<root>/lib/cmake/rexglue/rexglue-config.cmake
+        return cfg.parents[3]
+    for cfg in folder.rglob("rexglueConfig.cmake"):
+        return cfg.parents[3]
+    return None
+
+
+# --------------------------------------------------------------------------
+# The install job (runs on a worker thread)
+# --------------------------------------------------------------------------
+
+class Installer:
+    def __init__(self, iso: Path, root: Path, ui):
+        # Missing components (Visual Studio Build Tools, the SDK when it isn't bundled) are always
+        # downloaded and installed: the install screen says so before Install is clicked, and
+        # Windows asks for administrator permission for the Build Tools itself.
+        self.iso, self.root, self.ui = iso, root, ui
+        self.game = root / "game"
+        self.project = root / "project"
+        self.sdk_dir = root / "rexglue-sdk"
+        self.log_path = root / "install.log"
+        self.exe = self.project / "out" / "build" / PRESET / "eatlead.exe"
+
+    # helpers ------------------------------------------------------------
+    def log(self, msg):
+        line = time.strftime("[%H:%M:%S] ") + msg
+        with open(self.log_path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+        self.ui.put(("log", line))
+
+    def status(self, msg, frac=None):
+        self.ui.put(("status", msg, frac))
+
+    def stage(self, start, end):
+        return lambda f, *a: self.ui.put(("progress", start + (end - start) * max(0.0, min(1.0, f))))
+
+    def run_logged(self, cmd, progress=None, cwd=None):
+        self.log("> " + cmd)
+        env = dict(os.environ)
+        env.pop("REXSDK_DIR", None)
+        # Tool folders go first on PATH here, in the environment the command starts with, never as
+        # `set "PATH=...;%PATH%"` in the command: cmd expands %PATH% when it reads the whole line,
+        # before vcvars64.bat has run, so a second such `set` in the line threw the first away
+        # (which is how CMake went missing). vcvars64.bat then adds its own in front.
+        if getattr(self, "path_first", None):
+            env["PATH"] = os.pathsep.join(self.path_first + [env.get("PATH", "")])
+        p = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, errors="replace",
+                             creationflags=NO_WINDOW)
+        tail = []
+        for line in p.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            self.log(line)
+            tail = (tail + [line])[-25:]
+            m = re.match(r"\[(\d+)/(\d+)\]", line)
+            if m and progress:
+                progress(int(m.group(1)) / int(m.group(2)))
+        if p.wait() != 0:
+            raise InstallError(tr("A build step failed. Click \"Open log\" for details.\n\nLast output:\n{output}",
+                                  output="\n".join(tail[-8:])))
+
+    # steps --------------------------------------------------------------
+    def check_space(self):
+        self.root.mkdir(parents=True, exist_ok=True)
+        free = shutil.disk_usage(self.root).free / 1e9
+        self.log(f"Free space at install location: {free:.1f} GB")
+        if free < MIN_FREE_GB:
+            raise InstallError(tr("Not enough free space. The install needs about {needed} GB, and the chosen drive "
+                                  "has {free} GB free.", needed=MIN_FREE_GB, free=f"{free:.0f}"))
+
+    # Files the launcher edits (settings live in the packed engine config, and the table of
+    # contents records its size and MD5): checked for presence only, never restored from the disc.
+    EDITED_FILES = set()  # Eat Lead: the launcher edits none of the game's files
+
+    def verify_game(self, reader):
+        """Check the extracted game against the disc: every folder present (empty ones too: a
+        missing game\\Engine crashed the game at startup with "Failed to enumerate directory"),
+        every file present at the disc's size. Missing folders are created and missing or
+        wrong-sized files extracted again; anything still wrong stops the install."""
+        self.status(tr("Checking game files..."))
+        entries = [e for e in reader.walk() if e[0].split("/")[0] != "$SystemUpdate"]
+        bad, made = [], 0
+        for rel, is_dir, _start, size in entries:
+            target = self.game / rel
+            if is_dir:
+                if not target.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    made += 1
+                    self.log(f"Created missing folder {rel}")
+                continue
+            if not target.is_file():
+                bad.append(rel)
+            elif rel.lower() not in self.EDITED_FILES and target.stat().st_size != size:
+                bad.append(rel)
+        if bad:
+            self.log(f"{len(bad)} game file(s) missing or the wrong size, extracting them again: "
+                     + ", ".join(bad[:10]) + (" ..." if len(bad) > 10 else ""))
+            reader.extract(self.game, lambda frac, name: None, only=set(bad))
+            still = [r for r in bad if not (self.game / r).is_file()]
+            if still:
+                raise InstallError(tr("Some game files couldn't be extracted from the disc image:\n{files}\nThe image "
+                                      "may be incomplete or damaged.", files="\n".join(still[:10])))
+        files = sum(1 for e in entries if not e[1])
+        self.log(f"Game files checked: {files} files, {len(entries) - files} folders"
+                 f" ({made} folder(s) created, {len(bad)} file(s) restored)")
+
+    def extract_game(self):
+        xex = self.game / "default.xex"
+        if xex.exists() and (self.game / "Games").exists():
+            try:
+                same_game = xex_title_id(xex) == TITLE_ID
+            except InstallError:
+                same_game = False
+            if same_game:
+                self.log("Game files already extracted, skipping.")
+                reader = XisoReader(self.iso)
+                try:
+                    self.verify_game(reader)
+                finally:
+                    reader.close()
+                return
+        self.status(tr("Reading your disc image..."))
+        reader = XisoReader(self.iso)
+        try:
+            names = {e[0].lower() for e in reader.walk() if "/" not in e[0]}
+            if "default.xex" not in names:
+                raise InstallError(tr("This disc image has no default.xex. Is it an Xbox 360 game disc?"))
+            if self.game.exists():
+                shutil.rmtree(self.game)
+            self.status(tr("Extracting game files..."))
+            prog = self.stage(0.02, 0.30)
+            last = [0.0]
+
+            def p(frac, name):
+                if frac - last[0] > 0.002:
+                    last[0] = frac
+                    prog(frac)
+                    self.status(tr("Extracting game files... {percent}%", percent=f"{frac * 100:.0f}"))
+            n = reader.extract(self.game, p)
+            self.log(f"Extracted {n} entries to {self.game}")
+            self.verify_game(reader)
+        finally:
+            reader.close()
+        tid = xex_title_id(xex)
+        if tid != TITLE_ID:
+            raise InstallError(tr("This disc image is a different game (title ID {id}).\nThis installer needs Eat "
+                                  "Lead: The Return of Matt Hazard (title ID 445007EB).", id=f"{tid:08X}"))
+        self.log("Title ID OK: 445007EB")
+
+    def ensure_vs(self):
+        self.status(tr("Looking for C++ build tools..."))
+        vcvars = find_vs()
+        if vcvars:
+            self.log(f"Using build tools: {vcvars}")
+            return vcvars
+        existing = find_vs_incomplete()
+        if existing:
+            vcvars = self.complete_vs(existing)
+            if vcvars:
+                return vcvars
+        self.status(tr("Downloading Visual Studio Build Tools installer..."))
+        boot = self.root / "vs_buildtools.exe"
+        download(VS_BOOTSTRAPPER, boot, self.stage(0.30, 0.31))
+        self.status(tr("Installing Visual Studio Build Tools (several GB, this can take 10-30 minutes)..."))
+        self.log("Windows will ask for administrator permission.")
+        args = ["--quiet", "--wait", "--norestart", "--nocache", "--includeRecommended"]
+        for c in VS_COMPONENTS:
+            args += ["--add", c]
+        ps = ("$p = Start-Process -FilePath '{}' -ArgumentList '{}' -Verb RunAs -Wait -PassThru; exit $p.ExitCode"
+              .format(str(boot).replace("'", "''"), " ".join(args)))
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], creationflags=NO_WINDOW)
+        self.log(f"Build Tools installer exit code: {r.returncode}")
+        if r.returncode not in (0, 3010):
+            raise InstallError(tr("Installing Visual Studio Build Tools failed or was cancelled (code {code}).",
+                                  code=r.returncode))
+        vcvars = find_vs()
+        if not vcvars:
+            raise InstallError(tr("Build Tools finished installing but couldn't be found. Restart your PC and run "
+                                  "the installer again."))
+        return vcvars
+
+    def complete_vs(self, path: Path):
+        """Adds the missing parts to the Visual Studio install at `path`. None if that didn't work out (the caller
+        then installs Build Tools on its own)."""
+        setup = vswhere().parent / "setup.exe"
+        self.log(f"Visual Studio at {path} is missing parts we need (C++ build tools, Clang, CMake).")
+        if not setup.exists():
+            self.log("Visual Studio Installer (setup.exe) not found; installing Build Tools instead.")
+            return None
+        self.status(tr("Adding the missing C++ parts to your Visual Studio (this can take 10-30 minutes)..."))
+        self.log("Windows will ask for administrator permission.")
+        args = ["modify", "--installPath", f'"{path}"', "--quiet", "--norestart", "--includeRecommended"]
+        for c in VS_COMPONENTS:
+            args += ["--add", c]
+        ps = ("$p = Start-Process -FilePath '{}' -ArgumentList '{}' -Verb RunAs -Wait -PassThru; exit $p.ExitCode"
+              .format(str(setup).replace("'", "''"), " ".join(args).replace("'", "''")))
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], creationflags=NO_WINDOW)
+        self.log(f"Visual Studio Installer (modify) exit code: {r.returncode}")
+        vcvars = find_vs()
+        if vcvars:
+            self.log(f"Using build tools: {vcvars}")
+            return vcvars
+        if r.returncode in (0, 3010):
+            self.log("The parts were added but the build tools still weren't found; installing Build Tools instead.")
+        return None
+
+    def ensure_sdk(self):
+        root = find_sdk_root(self.sdk_dir) if self.sdk_dir.exists() else None
+        bundled = bundled_sdk()
+        if bundled:
+            # Use the SDK packed into this installer. An install made with a different SDK
+            # (the stock download, or an older bundle) is replaced; the marker file says which.
+            marker = self.sdk_dir / ".eatlead-sdk"
+            current = marker.read_text(encoding="utf-8").strip() if marker.exists() else ""
+            if root and current == bundled.name:
+                self.log(f"ReXGlue SDK already present: {root} ({bundled.name})")
+                return root
+            self.status(tr("Unpacking the ReXGlue SDK..."))
+            self.log(f"Unpacking bundled SDK {bundled.name}")
+            if self.sdk_dir.exists():
+                shutil.rmtree(self.sdk_dir)
+            self.sdk_dir.mkdir(parents=True)
+            with zipfile.ZipFile(bundled) as zf:
+                zf.extractall(self.sdk_dir)
+            marker.write_text(bundled.name, encoding="utf-8")
+            root = find_sdk_root(self.sdk_dir)
+            if not root:
+                raise InstallError(tr("The bundled ReXGlue SDK doesn't have the expected layout."))
+            self.log(f"ReXGlue SDK: {root}")
+            return root
+        if root:
+            self.log(f"ReXGlue SDK already present: {root}")
+            return root
+        self.status(tr("Downloading ReXGlue SDK {version}...", version=SDK_VERSION))
+        url, name = find_sdk_asset()
+        self.log(f"SDK download: {url}")
+        z = self.root / name
+        download(url, z, self.stage(0.40, 0.45))
+        with zipfile.ZipFile(z) as zf:
+            zf.extractall(self.sdk_dir)
+        z.unlink(missing_ok=True)
+        root = find_sdk_root(self.sdk_dir)
+        if not root:
+            raise InstallError(tr("The downloaded ReXGlue SDK doesn't have the expected layout."))
+        self.log(f"ReXGlue SDK: {root}")
+        return root
+
+    def setup_project(self):
+        self.status(tr("Preparing project files..."))
+        src = payload_dir() / "project"
+        if not src.exists():
+            raise InstallError(tr("Installer is missing its project files (payload). Re-download the installer."))
+        self.project.mkdir(parents=True, exist_ok=True)
+        for item in src.rglob("*"):
+            if item.is_file():
+                dst = self.project / item.relative_to(src)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(item, dst)
+        # Point the manifest at the extracted game.
+        man = self.project / "eatlead_manifest.toml"
+        text = man.read_text(encoding="utf-8")
+        text = re.sub(r'(?m)^game_root\s*=.*$', 'game_root = "../game"', text)
+        text = re.sub(r'(?m)^file_path\s*=.*$', 'file_path = "../game/default.xex"', text)
+        man.write_text(text, encoding="utf-8")
+        self.log("Project files copied; manifest points at ../game")
+
+    def build(self, vcvars: Path, sdk: Path):
+        prefix = str(sdk).replace("\\", "/")
+        # Visual Studio's own Clang (the "C++ Clang tools" component the installer requires),
+        # named explicitly: the preset says just "clang", and another Clang earlier on PATH (one
+        # seen: a clang 22 from another recompilation tool) fails on the SDK's headers with VS's
+        # library ("explicit specialization of undeclared template struct
+        # 'clock_time_conversion'"). Its folder goes first on PATH for the linker too.
+        llvm = vcvars.parents[2] / "Tools" / "Llvm" / "x64" / "bin"
+        compilers = ""
+        path_first = []
+        if (llvm / "clang++.exe").exists():
+            fwd = str(llvm).replace("\\", "/")
+            compilers = f'-DCMAKE_C_COMPILER="{fwd}/clang.exe" -DCMAKE_CXX_COMPILER="{fwd}/clang++.exe" '
+            path_first = [str(llvm)]
+            self.log(f"Using Clang: {llvm}")
+        # CMake and Ninja, found here: Visual Studio's "C++ CMake tools" first, then a CMake on PATH
+        # or installed on its own. The build used to find cmake only through a PATH that the
+        # Clang `set "PATH=...;%PATH%"` had reset to the one from before vcvars64.bat ran, so it
+        # worked only while a CMake was on the system PATH anyway (run_logged now sets PATH).
+        vs = vcvars.parents[3]
+        cmake_dirs = [vs / "Common7" / "IDE" / "CommonExtensions" / "Microsoft" / "CMake" / "CMake" / "bin"]
+        on_path = shutil.which("cmake")
+        if on_path:
+            cmake_dirs.append(Path(on_path).parent)
+        cmake_dirs.append(Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "CMake" / "bin")
+        cmake_dir = next((d for d in cmake_dirs if (d / "cmake.exe").exists()), None)
+        if not cmake_dir:
+            raise InstallError(tr("CMake wasn't found. Open the Visual Studio Installer, click Modify on your Visual "
+                                  "Studio, tick \"C++ CMake tools for Windows\" and install, then try again."))
+        self.log(f"Using CMake: {cmake_dir}")
+        tool_dirs = [str(cmake_dir)]
+        ninja_dir = vs / "Common7" / "IDE" / "CommonExtensions" / "Microsoft" / "CMake" / "Ninja"
+        if (ninja_dir / "ninja.exe").exists():
+            tool_dirs.append(str(ninja_dir))
+            self.log(f"Using Ninja: {ninja_dir}")
+        self.path_first = path_first + tool_dirs  # Clang first, then CMake and Ninja (run_logged)
+        base = f'call "{vcvars}" >nul && cd /d "{self.project}" && '
+        # Code generation must run before CMake configures: the project only adds the
+        # generated sources to the build if generated/default/sources.cmake already exists.
+        rexglue = sdk / "bin" / "rexglue.exe"
+        if not rexglue.exists():
+            raise InstallError(tr("The ReXGlue SDK is missing bin\\rexglue.exe."))
+        self.status(tr("Recompiling the game code (a few minutes, the bar won't move much)..."))
+        self.ui.put(("progress", 0.49))
+        self.run_logged(base + f'"{rexglue}" codegen eatlead_manifest.toml')
+        if not (self.project / "generated" / "default" / "sources.cmake").exists():
+            raise InstallError(tr("Code generation finished but produced no sources. Click \"Open log\" for details."))
+        self.ui.put(("progress", 0.55))
+        # Always (re)configure, so a build configured before codegen picks up the sources.
+        self.status(tr("Configuring the build..."))
+        # rexglue_DIR too: a build folder configured earlier keeps its SDK location in its cache,
+        # which wins over CMAKE_PREFIX_PATH, so a changed SDK would otherwise be ignored.
+        # --fresh: a build folder first configured with another compiler keeps it in its cache.
+        self.run_logged(base + f'cmake --fresh --preset {PRESET} {compilers}-DCMAKE_PREFIX_PATH="{prefix}" '
+                               f'-Drexglue_DIR="{prefix}/lib/cmake/rexglue"')
+        self.status(tr("Building the game (compiling: this takes a while)..."))
+        prog = self.stage(0.56, 0.98)
+
+        def p(frac):
+            prog(frac)
+            self.status(tr("Building the game... {percent}%", percent=f"{frac * 100:.0f}"))
+        self.run_logged(base + f'cmake --build out\\build\\{PRESET}', p)
+        if not self.exe.exists():
+            raise InstallError(tr("The build finished but eatlead.exe wasn't produced. Click \"Open log\" for details."))
+        # Graphics plugins: Skullburglar's native Vulkan renderer (the default) and ReXGlue's
+        # Xenos. The game's build copies them from the SDK; this catches a build that didn't.
+        for name in ("rexgpu-nativerd.dll", "rexgpu-xenosrd.dll"):
+            plugin = self.exe.parent / name
+            if not plugin.exists():
+                for cand in sdk.rglob(name):
+                    shutil.copy2(cand, plugin)
+                    self.log(f"Copied graphics plugin from {cand}")
+                    break
+        if default_plugin(self.exe) != "native":
+            self.log("The native renderer isn't in this SDK; choose Xenos in the launcher.")
+        # Third-party licences (Skullburglar's for the native renderer, among others).
+        lic = payload_dir() / "licenses"
+        if lic.is_dir():
+            dest = self.root / "licenses"
+            dest.mkdir(parents=True, exist_ok=True)
+            for f in lic.glob("*.txt"):
+                shutil.copy2(f, dest / f.name)
+
+    def make_launchers(self):
+        bat = self.root / "Play.bat"
+        bat.write_text(
+            "@echo off\r\n"
+            f'start "" /d "{self.exe.parent}" "{self.exe}" --game_data_root "{self.game}" '
+            f'--gpu_plugin {default_plugin(self.exe)} --log_file "{self.root / "game.log"}"\r\n', encoding="utf-8")
+        icon = self.root / "icon.ico"
+        src_icon = resource_dir() / "icon.ico"
+        if src_icon.exists():
+            shutil.copy2(src_icon, icon)
+        # Remember the install so the launcher can find it.
+        info = {"root": str(self.root), "exe": str(self.exe), "game": str(self.game)}
+        LAUNCHER_HOME.mkdir(parents=True, exist_ok=True)
+        (LAUNCHER_HOME / "launcher.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
+        # When running as the packaged launcher, keep a copy next to the game and point the shortcut at it,
+        # so settings are applied every time. Otherwise the shortcut starts the game directly.
+        target, args, wd = self.exe, f'--game_data_root "{self.game}" --gpu_plugin {default_plugin(self.exe)}', self.exe.parent
+        if getattr(sys, "frozen", False):
+            launcher = self.root / f"{LAUNCHER_EXE_NAME}.exe"
+            try:
+                if Path(sys.executable).resolve() != launcher.resolve():
+                    shutil.copy2(sys.executable, launcher)
+                target, args, wd = launcher, "", self.root
+            except OSError as e:
+                self.log(f"Couldn't copy the launcher next to the game: {e}")
+        desktop = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Desktop"
+        lnk = desktop / f"{APP_NAME}.lnk"
+        q = lambda p: str(p).replace("'", "''")
+        ps = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}');"
+              "$s.TargetPath='{exe}';$s.Arguments='{args}';"
+              "$s.WorkingDirectory='{wd}';{icon}$s.Save()").format(
+            lnk=q(lnk), exe=q(target), args=q(args), wd=q(wd),
+            icon=f"$s.IconLocation='{q(icon)},0';" if icon.exists() else "")
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], creationflags=NO_WINDOW)
+        self.log("Desktop shortcut created." if r.returncode == 0 else "Couldn't create desktop shortcut.")
+
+    def run(self):
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            self.log(f"--- Install started. ISO: {self.iso}  Location: {self.root}")
+            self.check_space()
+            self.extract_game()
+            vcvars = self.ensure_vs()
+            self.ui.put(("progress", 0.40))
+            sdk = self.ensure_sdk()
+            self.setup_project()
+            self.ui.put(("progress", 0.48))
+            self.build(vcvars, sdk)
+            self.make_launchers()
+            self.ui.put(("progress", 1.0))
+            self.log("--- Install finished.")
+            self.ui.put(("done", str(self.exe), str(self.game)))
+        except InstallError as e:
+            self.log("ERROR: " + str(e))
+            self.ui.put(("error", str(e)))
+        except Exception as e:  # unexpected: keep the traceback in the log
+            self.log("UNEXPECTED ERROR:\n" + traceback.format_exc())
+            self.ui.put(("error", tr("Something unexpected went wrong: {error}\nClick \"Open log\" for details.",
+                                     error=e)))
+
+
+# --------------------------------------------------------------------------
+# UI
+# --------------------------------------------------------------------------
+
+BG, FG, DIM, ACCENT, FIELD = "#14161b", "#e9e6df", "#9a968c", "#b8741f", "#ffffff"
+
+
+LAUNCHER_HOME = DEFAULT_DIR.parent / "EatLeadPC"
+
+
+def start_game(args, cwd, extra_env=None):
+    """Start the game fully separate from this (PyInstaller one-file) program.
+
+    A one-file exe unpacks itself into a temporary _MEI folder and points the Windows DLL
+    search path and a few environment variables at it. Child processes inherit those, so
+    the game could load DLLs from that folder and keep it locked; when the launcher then
+    closed, Windows showed "Failed to remove temporary directory". Clear all of that first.
+    """
+    env = dict(os.environ)
+    env.update(extra_env or {})
+    mei = getattr(sys, "_MEIPASS", None)
+    if mei:
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+        for k in ("TCL_LIBRARY", "TK_LIBRARY", "_MEIPASS2", "_PYI_APPLICATION_HOME_DIR",
+                  "_PYI_ARCHIVE_FILE", "_PYI_PARENT_PROCESS_LEVEL", "_PYI_SPLASH_IPC"):
+            env.pop(k, None)
+        env["PATH"] = os.pathsep.join(p for p in env.get("PATH", "").split(os.pathsep)
+                                      if p and not p.lower().startswith(mei.lower()))
+    flags = 0
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetDllDirectoryW(None)
+        except Exception:
+            pass
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    return subprocess.Popen(args, cwd=str(cwd), env=env, creationflags=flags, close_fds=True,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+
+
+def default_plugin(exe) -> str:
+    """The native renderer when its plugin is next to eatlead.exe, else ReXGlue's Xenos."""
+    return "native" if any(Path(exe).parent.glob("rexgpu-native*.dll")) else "xenos"
+
+
+def install_info_path() -> Path:
+    """Where the launcher remembers the install (always in %LOCALAPPDATA%)."""
+    return LAUNCHER_HOME / "launcher.json"
+
+
+def setup_style(widget):
+    style = ttk.Style(widget)
+    style.theme_use("clam")
+    style.configure("Bar.Horizontal.TProgressbar", troughcolor="#2a2f38", background=ACCENT,
+                    bordercolor=BG, lightcolor=ACCENT, darkcolor=ACCENT)
+
+
+class InstallView(tk.Frame):
+    """The install screen. on_installed(exe, game, root) is called after a successful install."""
+
+    def __init__(self, master, on_installed=None, on_back=None, default_dir=None, on_language=None,
+                 language_choice="same", iso=""):
+        """on_language(choice, iso, folder): a launcher language picked at the top right (the launcher draws
+        the screen again in it, keeping what was typed)."""
+        super().__init__(master, bg=BG)
+        self.on_installed, self.on_back = on_installed, on_back
+        self.q = queue.Queue()
+        self.worker = None
+        self.exe = self.game = None
+
+        pad = dict(padx=28)
+        head = tk.Frame(self, bg=BG)
+        head.pack(fill="x", pady=(22, 0), **pad)
+        tk.Label(head, text=APP_NAME.upper(), font=("Segoe UI", 26, "bold"), fg=ACCENT, bg=BG).pack(side="left")
+        if on_language:
+            import launcher_text
+            choices = ["same"] + list(launcher_text.LANGUAGE_CODES)
+            names = [tr("Same as game")] + [launcher_text.NATIVE_NAMES[c] for c in launcher_text.LANGUAGE_CODES]
+            picker = ttk.Combobox(head, values=names, state="readonly", width=16)
+            picker.current(choices.index(language_choice) if language_choice in choices else 0)
+            picker.pack(side="right", anchor="n", pady=(8, 0))
+            picker.bind("<<ComboboxSelected>>", lambda e: not self.busy() and on_language(
+                choices[picker.current()], self.iso_var.get(), self.dir_var.get()))
+            tk.Label(head, text=tr("Launcher language"), font=("Segoe UI", 9), fg=DIM, bg=BG
+                     ).pack(side="right", anchor="n", padx=(0, 6), pady=(10, 0))
+        tk.Label(self, text=tr("Your disc. One installer. Ready to play."), font=("Segoe UI", 12),
+                 fg=DIM, bg=BG).pack(anchor="w", **pad)
+
+        self.iso_var = tk.StringVar(value=iso)
+        self.dir_var = tk.StringVar(value=str(default_dir or DEFAULT_DIR))
+        self._row(tr("1  Choose your game disc image"), self.iso_var, tr("Choose ISO..."), self.pick_iso)
+        self._row(tr("2  Install location"), self.dir_var, tr("Change..."), self.pick_dir)
+
+        tk.Label(self, text=tr("The installer reads your ISO and builds the game on this PC. If this PC doesn't "
+                               "have Microsoft's C++ build tools yet, it downloads and installs them first "
+                               "(Visual Studio Build Tools, several GB; Windows asks for administrator "
+                               "permission), so the first install can take a while."), font=("Segoe UI", 9), fg=DIM, bg=BG, wraplength=690,
+                 justify="left").pack(anchor="w", pady=(14, 4), **pad)
+
+        self.status_var = tk.StringVar(value=tr("Choose your ISO, then click Install."))
+        tk.Label(self, textvariable=self.status_var, font=("Segoe UI", 11, "bold"), fg=FG, bg=BG,
+                 wraplength=690, justify="left").pack(anchor="w", pady=(16, 6), **pad)
+        self.bar = ttk.Progressbar(self, style="Bar.Horizontal.TProgressbar", maximum=1.0)
+        self.bar.pack(fill="x", **pad)
+
+        self.details_open = False
+        self.det_btn = tk.Button(self, text=tr("+ Installation details"), command=self.toggle_details,
+                                 font=("Segoe UI", 10), fg=FG, bg=BG, bd=0, activebackground=BG,
+                                 activeforeground=FG, cursor="hand2")
+        self.det_btn.pack(anchor="w", pady=(10, 0), **pad)
+        self.details = tk.Text(self, height=10, bg="#0b0d11", fg=DIM, font=("Consolas", 9), bd=0,
+                               wrap="none", state="disabled")
+
+        btns = tk.Frame(self, bg=BG)
+        btns.pack(side="bottom", fill="x", pady=22, **pad)
+        self.go_btn = tk.Button(btns, text=tr("Install"), width=14, command=self.start,
+                                font=("Segoe UI", 12, "bold"), bg=ACCENT, fg="white",
+                                activebackground="#d08a2e", activeforeground="white", bd=0, pady=8)
+        self.go_btn.pack(side="right")
+        tk.Button(btns, text=tr("Open log"), width=12, command=self.open_log, font=("Segoe UI", 12),
+                  bd=0, pady=8).pack(side="right", padx=10)
+        if on_back:
+            self.back_btn = tk.Button(btns, text=tr("Back"), width=10, command=on_back, font=("Segoe UI", 12),
+                                      bd=0, pady=8)
+            self.back_btn.pack(side="left")
+
+        self.after(100, self.poll)
+
+    def busy(self):
+        return bool(self.worker and self.worker.is_alive())
+
+    def _row(self, label, var, btn, cmd):
+        tk.Label(self, text=label, font=("Segoe UI", 12, "bold"), fg=FG, bg=BG
+                 ).pack(anchor="w", padx=28, pady=(18, 4))
+        f = tk.Frame(self, bg=BG)
+        f.pack(fill="x", padx=28)
+        tk.Entry(f, textvariable=var, font=("Segoe UI", 11), relief="flat", bg=FIELD
+                 ).pack(side="left", fill="x", expand=True, ipady=6)
+        tk.Button(f, text=btn, command=cmd, font=("Segoe UI", 11), width=12, bd=0, pady=5
+                  ).pack(side="left", padx=(10, 0))
+
+    def pick_iso(self):
+        p = filedialog.askopenfilename(title=tr("Choose your game disc image"),
+                                       filetypes=[(tr("Disc images"), "*.iso"), (tr("All files"), "*.*")])
+        if p:
+            self.iso_var.set(p)
+
+    def pick_dir(self):
+        p = filedialog.askdirectory(title=tr("Choose install location"))
+        if p:
+            self.dir_var.set(str(Path(p) / "EatLeadPC"))
+
+    def toggle_details(self):
+        self.details_open = not self.details_open
+        if self.details_open:
+            self.details.pack(fill="both", expand=True, padx=28, pady=(6, 0))
+            self.det_btn.config(text=tr("- Installation details"))
+        else:
+            self.details.pack_forget()
+            self.det_btn.config(text=tr("+ Installation details"))
+
+    def open_log(self):
+        log = Path(self.dir_var.get()) / "install.log"
+        if log.exists():
+            os.startfile(log)
+        else:
+            messagebox.showinfo(tr("Log"), tr("There's no install log yet."))
+
+    def start(self):
+        if self.exe:
+            if self.on_installed:
+                return self.on_installed(self.exe, self.game, self.root_dir)
+            return start_game([self.exe, "--game_data_root", self.game, "--gpu_plugin", default_plugin(self.exe)],
+                              Path(self.exe).parent)
+        iso = Path(self.iso_var.get().strip('" '))
+        if not iso.is_file():
+            messagebox.showerror(tr("Choose ISO"), tr("Choose your game's .iso file first."))
+            return
+        root = Path(self.dir_var.get().strip('" '))
+        bad = sorted(set(str(root)) & set("[]*?;#$%!&^`~'"))
+        if bad or not str(root).isascii():
+            messagebox.showerror(
+                tr("Install location"),
+                tr("Please choose an install location without these characters: {characters}\n\nThe build tools "
+                   "treat them as special characters and the build fails.\nFor example: {folder}",
+                   characters=" ".join(bad) if bad else tr("non-English letters"), folder=DEFAULT_DIR))
+            return
+        self.root_dir = root
+        self.go_btn.config(state="disabled", text=tr("Installing..."))
+        if self.on_back:
+            self.back_btn.config(state="disabled")
+        self.bar["value"] = 0
+        self.worker = threading.Thread(target=Installer(iso, root, self.q).run,
+                                       daemon=True)
+        self.worker.start()
+
+    def poll(self):
+        try:
+            while True:
+                msg = self.q.get_nowait()
+                kind = msg[0]
+                if kind == "log":
+                    self.details.config(state="normal")
+                    self.details.insert("end", msg[1] + "\n")
+                    lines = int(self.details.index("end-1c").split(".")[0])
+                    if lines > 3000:
+                        self.details.delete("1.0", f"{lines - 3000}.0")
+                    self.details.see("end")
+                    self.details.config(state="disabled")
+                elif kind == "status":
+                    self.status_var.set(msg[1])
+                elif kind == "progress":
+                    self.bar["value"] = msg[1]
+                elif kind == "done":
+                    self.exe, self.game = msg[1], msg[2]
+                    self.status_var.set(tr("Installed! A desktop shortcut was created."))
+                    self.go_btn.config(state="normal", text=tr("Continue") if self.on_installed else tr("Play"))
+                    if self.on_back:
+                        self.back_btn.config(state="normal")
+                elif kind == "error":
+                    self.status_var.set(tr("Install stopped. See the message, or click \"Open log\"."))
+                    self.go_btn.config(state="normal", text=tr("Install"))
+                    if self.on_back:
+                        self.back_btn.config(state="normal")
+                    messagebox.showerror(tr("Install stopped"), msg[1])
+        except queue.Empty:
+            pass
+        self.after(100, self.poll)
+
+
+def make_root(title):
+    root = tk.Tk()
+    root.title(title)
+    root.configure(bg=BG)
+    icon = resource_dir() / "icon.ico"
+    if icon.exists():
+        try:
+            root.iconbitmap(default=str(icon))
+        except tk.TclError:
+            pass
+    setup_style(root)
+    return root
+
+
+if __name__ == "__main__":
+    r = make_root(f"{APP_NAME} - Install & Play")
+    r.geometry("760x640")
+    v = InstallView(r)
+    v.pack(fill="both", expand=True)
+    r.mainloop()

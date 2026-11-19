@@ -4,8 +4,8 @@
 
 cmake_minimum_required(VERSION 3.25)
 # The release number, shown in the log's first line (version_log.cpp).
-project(eatlead VERSION 0.0.1 LANGUAGES CXX)
-set(EATLEAD_RELEASE "0.0.1")
+project(eatlead VERSION 0.1.0 LANGUAGES CXX)
+set(EATLEAD_RELEASE "0.1.0")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,6 +24,7 @@ set(EATLEAD_SOURCES
     src/menu_trace.cpp
     src/menu_quit.cpp
     src/pad_prompts.cpp
+    src/vibration.cpp
 )
 
 if(WIN32)
@@ -55,3 +56,12 @@ if(EATLEAD_FFX_DLLS)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different ${EATLEAD_FFX_DLLS} $<TARGET_FILE_DIR:eatlead>
         COMMENT "Copying FidelityFX runtime")
 endif()
+
+# The native renderer's images, beside eatlead.exe (it looks in the working folder, which the launcher sets to the
+# exe's): the main menu's Quit hint (hints/, patch 0013) and the PlayStation buttons (prompts/, patch 0014).
+foreach(_assets hints prompts)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/assets/${_assets}")
+        add_custom_command(TARGET eatlead POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets/${_assets}" "$<TARGET_FILE_DIR:eatlead>/${_assets}")
+    endif()
+endforeach()

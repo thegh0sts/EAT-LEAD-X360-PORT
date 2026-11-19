@@ -1,0 +1,5 @@
+payload/
+build/
+dist/
+*.spec
+__pycache__/
