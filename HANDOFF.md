@@ -60,6 +60,11 @@ Update this file at the end of each working session. Started 2026-11-19.
   opens or closes no screen within 150 ms closes the window (B does nothing on the console's main menu).
   `--menu_trace=true` logs the actions, button presses (XInputGetState is sub_82268C50) and sub_82269408's file
   opens (which never ran: regions load another way). Screen names weren't found in the action objects.
+- **Lighting above render scale 1** (2026-11-19): bright, hard-edged patches of light on walls at 4K, gone at
+  scale 1. The deferred lights find their G-buffer texels from the pixel position (vPos, ps_param_gen), which the
+  SDK's translator gave in host pixels: Skullburglar's SDK patch 0003 adds `Features::render_scale` (the native
+  renderer sets it) but only its patch 0015, not applied, used it. `tools/sdk-patches/0012-pixel-position-scale`
+  maps each host pixel centre back to guest pixels (SDK patch tag own12). Waiting for a test at 1440p/4K.
 - **FPS counter**: `--show_fps` (and `--show_fps_detail`, `--brightness`, `--achievement_popups`), drawn by the
   native renderer as in Bourne.
 - **Repository**: thegh0sts/EAT-LEAD-X360-PORT (first commit from the cloud workspace, 2026-11-19).

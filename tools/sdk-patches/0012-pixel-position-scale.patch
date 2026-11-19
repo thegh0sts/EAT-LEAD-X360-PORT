@@ -1,0 +1,60 @@
+eatlead: the pixel position pixel shaders read (ps_param_gen, vPos) in guest pixels when a renderer
+draws at a resolution scale of its own: Skullburglar's patch 0003 adds Features::render_scale
+(the native renderer sets it from BOTS_GFX_RENDER_SCALE), but the translator only used it in its
+patch 0015, which isn't applied here. Without this, Eat Lead's deferred lights, which find their
+G-buffer texels from vPos, read the wrong places above render scale 1 and drew patches of light
+on the walls. Each host pixel centre maps to (floor + 0.5) / scale - 0.5, clamped at 0.
+
+diff -ruN a/src/graphics/pipeline/shader/spirv_translator.cpp b/src/graphics/pipeline/shader/spirv_translator.cpp
+--- a/src/graphics/pipeline/shader/spirv_translator.cpp	2026-11-19 22:04:11.167678219 +1100
++++ b/src/graphics/pipeline/shader/spirv_translator.cpp	2026-11-19 22:04:11.169463966 +1100
+@@ -3214,6 +3214,24 @@
+       param_gen_x = builder_->createNoContractionBinOp(
+           spv::OpFMul, type_float_, param_gen_x,
+           builder_->makeFloatConstant(1.0f / float(draw_resolution_scale_x_)));
++    } else if (features_.render_scale > 0.0f && features_.render_scale != 1.0f) {
++      // eatlead: a renderer drawing at a scale of its own (Features::render_scale, from Skullburglar's patch 0003;
++      // the native renderer's BOTS_GFX_RENDER_SCALE): max(0, (floor(host) + 0.5) / scale - 0.5), each host pixel
++      // centre in guest pixels, so a shader that adds half a pixel and divides by the guest size samples the host
++      // pixel it draws.
++      param_gen_x = builder_->createNoContractionBinOp(
++          spv::OpFAdd, type_float_,
++          builder_->createNoContractionBinOp(
++              spv::OpFMul, type_float_,
++              builder_->createNoContractionBinOp(spv::OpFAdd, type_float_, param_gen_x,
++                                                 builder_->makeFloatConstant(0.5f)),
++              builder_->makeFloatConstant(1.0f / features_.render_scale)),
++          builder_->makeFloatConstant(-0.5f));
++      id_vector_temp_.clear();
++      id_vector_temp_.push_back(param_gen_x);
++      id_vector_temp_.push_back(const_float_0_);
++      param_gen_x = builder_->createBuiltinCall(type_float_, ext_inst_glsl_std_450_, GLSLstd450FMax,
++                                                     id_vector_temp_);
+     }
+     param_gen_x = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
+                                                    GLSLstd450FAbs, param_gen_x);
+@@ -3250,6 +3268,24 @@
+       param_gen_y = builder_->createNoContractionBinOp(
+           spv::OpFMul, type_float_, param_gen_y,
+           builder_->makeFloatConstant(1.0f / float(draw_resolution_scale_y_)));
++    } else if (features_.render_scale > 0.0f && features_.render_scale != 1.0f) {
++      // eatlead: a renderer drawing at a scale of its own (Features::render_scale, from Skullburglar's patch 0003;
++      // the native renderer's BOTS_GFX_RENDER_SCALE): max(0, (floor(host) + 0.5) / scale - 0.5), each host pixel
++      // centre in guest pixels, so a shader that adds half a pixel and divides by the guest size samples the host
++      // pixel it draws.
++      param_gen_y = builder_->createNoContractionBinOp(
++          spv::OpFAdd, type_float_,
++          builder_->createNoContractionBinOp(
++              spv::OpFMul, type_float_,
++              builder_->createNoContractionBinOp(spv::OpFAdd, type_float_, param_gen_y,
++                                                 builder_->makeFloatConstant(0.5f)),
++              builder_->makeFloatConstant(1.0f / features_.render_scale)),
++          builder_->makeFloatConstant(-0.5f));
++      id_vector_temp_.clear();
++      id_vector_temp_.push_back(param_gen_y);
++      id_vector_temp_.push_back(const_float_0_);
++      param_gen_y = builder_->createBuiltinCall(type_float_, ext_inst_glsl_std_450_, GLSLstd450FMax,
++                                                     id_vector_temp_);
+     }
+     param_gen_y = builder_->createUnaryBuiltinCall(type_float_, ext_inst_glsl_std_450_,
+                                                    GLSLstd450FAbs, param_gen_y);
