@@ -20,6 +20,16 @@
 #include <string>
 #include <unordered_map>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
@@ -33,27 +43,28 @@ uint32_t Load32(const uint8_t* base, uint32_t a) {
   return uint32_t(base[a]) << 24 | uint32_t(base[a + 1]) << 16 | uint32_t(base[a + 2]) << 8 | base[a + 3];
 }
 
-bool Readable(uint32_t addr) {
-  static std::unordered_map<uint32_t, bool> pages;
-  const uint32_t page = addr >> 12;
-  if (const auto it = pages.find(page); it != pages.end()) return it->second;
-  bool ok = false;
-  auto* runtime = rex::Runtime::instance();
-  if (runtime && runtime->memory()) {
-    if (auto* heap = runtime->memory()->LookupHeap(addr)) {
-      uint32_t protect = 0;
-      ok = heap->QueryProtect(addr, &protect) && (protect & rex::memory::kMemoryProtectRead);
-    }
-  }
-  pages.emplace(page, ok);
-  return ok;
+// Whether the host page behind a guest address can be read. The guest heaps' own protection said yes for
+// pages that weren't committed on the host (third run crashed reading 0x41F979C4), so ask Windows directly,
+// every time (pages come and go).
+bool Readable(const uint8_t* base, uint32_t addr) {
+#ifdef _WIN32
+  MEMORY_BASIC_INFORMATION info{};
+  if (!VirtualQuery(base + addr, &info, sizeof(info))) return false;
+  constexpr DWORD kRead = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                          PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+  return info.State == MEM_COMMIT && (info.Protect & kRead) && !(info.Protect & (PAGE_GUARD | PAGE_NOACCESS));
+#else
+  (void)base;
+  (void)addr;
+  return false;
+#endif
 }
 
 // Heap (the game's objects are at 0xF...), physical memory or the executable's data.
-bool Pointer(uint32_t a) {
+bool Pointer(const uint8_t* base, uint32_t a) {
   return ((a >= 0x40000000 && a < 0x80000000) || (a >= 0x82000000 && a < 0x82600000) ||
           (a >= 0xA0000000 && a < 0xFFFF0000)) &&
-         Readable(a) && Readable(a + 0xFF);
+         Readable(base, a) && Readable(base, a + 0xFF);
 }
 
 // Text at a: 3+ printable characters then a 0 (8-bit), or the same as UTF-16.
@@ -80,7 +91,7 @@ void Strings(const uint8_t* base, uint32_t at, uint32_t size, int depth, std::st
   char buf[32];
   for (uint32_t i = 0; i < size; i += 4) {
     const uint32_t p = Load32(base, at + i);
-    if (!Pointer(p) || !seen.insert(p).second || seen.size() > 200) continue;
+    if (!Pointer(base, p) || !seen.insert(p).second || seen.size() > 200) continue;
     std::snprintf(buf, sizeof(buf), "%s+%X", path.c_str(), i);
     if (const std::string t = Text(base, p); !t.empty()) {
       out += " ";
@@ -129,12 +140,12 @@ void Resolved(uint32_t dialog, uint8_t* base) {
   std::lock_guard<std::mutex> lock(Mutex());
   if (!pairs.insert(uint64_t(g_object) << 32 | dialog).second) return;
   std::string text;
-  if (Pointer(dialog) && dumped.insert(dialog).second) {
+  if (Pointer(base, dialog) && dumped.insert(dialog).second) {
     std::set<uint32_t> seen;
     Strings(base, dialog, 0x100, 2, "", seen, text);
     text = "\n    words" + Dump(base, dialog, 0x80) + "\n    text" + text;
   }
-  if (Pointer(g_object) && dumped.insert(g_object).second) {
+  if (Pointer(base, g_object) && dumped.insert(g_object).second) {
     std::set<uint32_t> seen;
     std::string atext;
     Strings(base, g_object, 0xA4, 2, "", seen, atext);
