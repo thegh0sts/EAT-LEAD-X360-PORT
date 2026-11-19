@@ -65,10 +65,19 @@ Update this file at the end of each working session. Started 2026-11-19.
 ## Next steps
 
 0. Done today: steps 1-4 below, plus 60 FPS. Now: **launcher and installer** (adapted from Bourne's
-   `installer/`: install from the player's disc image, build, settings incl. frame rate 30/60, renderer,
+   `installer/`: install from the player's disc image, build, settings incl. frame rate 30/60,
    resolution, FXAA, texture filtering, and the FPS counter as Off / Simple / Detailed with everything
-   the native overlay draws: frame rate and times, GPU, CPU, RAM/VRAM, clock, frame graph, achievement pop-ups). Later: keyboard and mouse, play further (controls, `.wmv` intros,
-   saving, other levels), the Xenos blank screen.
+   the native overlay draws: frame rate and times, GPU, CPU, RAM/VRAM, clock, frame graph, achievement
+   pop-ups). Mockup: https://claude.ai/artifact/4VtmDhEN3bn7RgxAxukPEn (Display, install, Controls).
+   Decisions for the first release (2026-11-19):
+   - **Native renderer only.** The launcher has no renderer choice; `gpu_plugin` stays in the config
+     for testing (`--gpu_plugin xenos`). Achievement pop-ups are unaffected: the native renderer draws
+     them (patch 0006), as in Bourne.
+   - **Controller only.** No keyboard and mouse; the Controls tab has deadzone, vibration and invert Y.
+     Keyboard and mouse only if players ask for it.
+   - `src/achievement_list.cpp` (from Bourne) writes the achievement list and icons for the launcher's
+     Achievements tab.
+   Later: play further (controls, `.wmv` intros, saving, other levels), the Xenos blank screen.
 
 1. **Code generation on the PC** (x64 Native Tools prompt, in the project folder):
    ```
