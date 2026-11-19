@@ -1,0 +1,94 @@
+# Function starts found by scanning the decrypted code for stretches no recompiled function covers
+# (tools in the cloud workspace: gapscan.py / classify.py, see HANDOFF.md). Each one follows a
+# return, jump or padding, decodes as code (not a table of addresses), and is no label inside
+# another function. Most are tiny virtual-method stubs (a lone blr, or one branch) called
+# through a pointer, which static analysis can't see: the first run crashed on 0x821A9300.
+# To disable this whole batch, remove "default_functions_scan.toml" from includes in
+# eatlead_manifest.toml.
+
+[functions]
+0x82091CC0 = { name = "sub_82091CC0" }
+0x82095168 = { name = "sub_82095168" }
+0x82095170 = { name = "sub_82095170" }
+0x820A7C38 = { name = "sub_820A7C38" }
+0x820A8668 = { name = "sub_820A8668" }
+0x820A90B0 = { name = "sub_820A90B0" }
+0x820A9C64 = { name = "sub_820A9C64" }
+0x820A9E1C = { name = "sub_820A9E1C" }
+0x820AB370 = { name = "sub_820AB370" }
+0x820AD6F4 = { name = "sub_820AD6F4" }
+0x820B4BC4 = { name = "sub_820B4BC4" }
+0x820BAE2C = { name = "sub_820BAE2C" }
+0x820C24B4 = { name = "sub_820C24B4" }
+0x820C9888 = { name = "sub_820C9888" }
+0x820C98F4 = { name = "sub_820C98F4" }
+0x820D45DC = { name = "sub_820D45DC" }
+0x820D46E0 = { name = "sub_820D46E0" }
+0x820D4E30 = { name = "sub_820D4E30" }
+0x820D58C0 = { name = "sub_820D58C0" }
+0x820DE3B8 = { name = "sub_820DE3B8" }
+0x82139184 = { name = "sub_82139184" }
+0x8215A728 = { name = "sub_8215A728" }
+0x821697E8 = { name = "sub_821697E8" }
+0x8216A37C = { name = "sub_8216A37C" }
+0x8216BD5C = { name = "sub_8216BD5C" }
+0x8216BDAC = { name = "sub_8216BDAC" }
+0x8216BE00 = { name = "sub_8216BE00" }
+0x8217BCF0 = { name = "sub_8217BCF0" }
+0x8218AE94 = { name = "sub_8218AE94" }
+0x8218BA10 = { name = "sub_8218BA10" }
+0x821A9300 = { name = "sub_821A9300" }
+0x82269C08 = { name = "sub_82269C08" }
+0x82292A98 = { name = "sub_82292A98" }
+0x82293B08 = { name = "sub_82293B08" }
+0x822962B4 = { name = "sub_822962B4" }
+0x822962D8 = { name = "sub_822962D8" }
+0x82296300 = { name = "sub_82296300" }
+0x82296328 = { name = "sub_82296328" }
+0x82297790 = { name = "sub_82297790" }
+0x82297798 = { name = "sub_82297798" }
+0x822977A0 = { name = "sub_822977A0" }
+0x822977B0 = { name = "sub_822977B0" }
+0x8229C270 = { name = "sub_8229C270" }
+0x8229C278 = { name = "sub_8229C278" }
+0x8229C280 = { name = "sub_8229C280" }
+0x8229C288 = { name = "sub_8229C288" }
+0x8229C290 = { name = "sub_8229C290" }
+0x8229C2A0 = { name = "sub_8229C2A0" }
+0x8229C2A8 = { name = "sub_8229C2A8" }
+0x8229C2B0 = { name = "sub_8229C2B0" }
+0x8229C508 = { name = "sub_8229C508" }
+0x8229C510 = { name = "sub_8229C510" }
+0x8229C520 = { name = "sub_8229C520" }
+0x822AD620 = { name = "sub_822AD620" }
+0x822AD648 = { name = "sub_822AD648" }
+0x822AD670 = { name = "sub_822AD670" }
+0x822ADBE0 = { name = "sub_822ADBE0" }
+0x822AE840 = { name = "sub_822AE840" }
+0x822C1EF0 = { name = "sub_822C1EF0" }
+0x822D3CD0 = { name = "sub_822D3CD0" }
+0x822D3D30 = { name = "sub_822D3D30" }
+0x822D3FD0 = { name = "sub_822D3FD0" }
+0x822D408C = { name = "sub_822D408C" }
+0x822DA9C8 = { name = "sub_822DA9C8" }
+0x822DA9F8 = { name = "sub_822DA9F8" }
+0x822EDAC8 = { name = "sub_822EDAC8" }
+0x822EE0F0 = { name = "sub_822EE0F0" }
+0x822F8790 = { name = "sub_822F8790" }
+0x822F87A8 = { name = "sub_822F87A8" }
+0x822F87C8 = { name = "sub_822F87C8" }
+0x822F8960 = { name = "sub_822F8960" }
+0x822F8980 = { name = "sub_822F8980" }
+0x822F89A0 = { name = "sub_822F89A0" }
+0x822F89C0 = { name = "sub_822F89C0" }
+0x822F89E0 = { name = "sub_822F89E0" }
+0x822F8A00 = { name = "sub_822F8A00" }
+0x822F8A20 = { name = "sub_822F8A20" }
+0x822F8A40 = { name = "sub_822F8A40" }
+0x822F8A60 = { name = "sub_822F8A60" }
+0x822F8A80 = { name = "sub_822F8A80" }
+0x822FA308 = { name = "sub_822FA308" }
+0x822FA5C8 = { name = "sub_822FA5C8" }
+0x822FA5F8 = { name = "sub_822FA5F8" }
+0x822FFAD0 = { name = "sub_822FFAD0" }
+0x823633BC = { name = "sub_823633BC" }

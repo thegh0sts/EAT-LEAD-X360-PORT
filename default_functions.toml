@@ -1,0 +1,8 @@
+# Manual function starts for default.xex that the analyzer doesn't find on its own.
+# Every entry is checked against the decrypted code: it must follow a return/jump or padding.
+
+[functions]
+# Tail-call target (b from 0x822AD854); a leaf function right after "b 0x822BE880".
+0x822BE8A0 = { name = "sub_822BE8A0" }
+# This-pointer adjust thunk (addi r3,r3,8; b 0x8228EC80); the next thunk at 0x822903B0 chains into it.
+0x822903A8 = { name = "sub_822903A8" }
