@@ -16,7 +16,7 @@ set "SDK_FOLDER=%~1"
 if "%SDK_FOLDER%"=="" if exist "C:\rexglue-src\rexglue-sdk\out\install\win-amd64\lib\cmake\rexglue" set "SDK_FOLDER=C:\rexglue-src\rexglue-sdk\out\install\win-amd64"
 rem Name of the bundled SDK: bump the suffix whenever the SDK or the native renderer's patches change,
 rem so existing installs replace their SDK on the next install.
-set "SDK_BUNDLE=rexglue-sdk-0.10.1-el1-win-amd64.zip"
+set "SDK_BUNDLE=rexglue-sdk-0.10.1-el2-win-amd64.zip"
 
 if not exist "%SDK_FOLDER%\bin\rexgpu-native*.dll" if not exist "%SDK_FOLDER%\lib\rexgpu-native*.dll" (
   echo Note: no rexgpu-native DLL found in "%SDK_FOLDER%". Eat Lead needs the native renderer:
