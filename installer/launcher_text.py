@@ -75,6 +75,146 @@ CONTEXT = {
 }
 
 TEXT = {
+    'Achievement pop-ups': (
+        'Erfolgs-Pop-ups',
+        'Notifications de succès',
+        'Avisos de logros',
+        'Popup degli obiettivi'),
+    'Auto': (
+        'Automatisch',
+        'Auto',
+        'Automático',
+        'Automatico'),
+    'Credits': (
+        'Mitwirkende',
+        'Crédits',
+        'Créditos',
+        'Riconoscimenti'),
+    'Detailed': (
+        'Detailliert',
+        'Détaillé',
+        'Detallado',
+        'Dettagliato'),
+    'Disabled': (
+        'Deaktiviert',
+        'Désactivé',
+        'Desactivado',
+        'Disattivato'),
+    'Enabled': (
+        'Aktiviert',
+        'Activé',
+        'Activado',
+        'Attivato'),
+    'FXAA strong': (
+        'FXAA stark',
+        'FXAA fort',
+        'FXAA fuerte',
+        'FXAA forte'),
+    'If the game crashes or misbehaves: the logs show what happened, and a crash report gathers them into one file to send with a bug report.': (
+        'Wenn das Spiel abstürzt oder Fehler macht: Die Protokolle zeigen, was passiert ist, und ein Absturzbericht fasst sie in einer Datei zusammen, die du einer Fehlermeldung beilegen kannst.',
+        "Si le jeu plante ou se comporte mal : les journaux montrent ce qui s'est passé, et un rapport de plantage les rassemble dans un seul fichier à joindre à un signalement de bug.",
+        'Si el juego se cuelga o falla: los registros muestran qué pasó, y un informe de fallo los reúne en un solo archivo para enviar con un informe de error.',
+        'Se il gioco si blocca o non funziona bene: i log mostrano cosa è successo, e un rapporto di crash li riunisce in un unico file da allegare a una segnalazione di bug.'),
+    'Original': (
+        'Original',
+        'Original',
+        'Original',
+        'Originale'),
+    'Save settings': (
+        'Einstellungen speichern',
+        'Enregistrer les réglages',
+        'Guardar ajustes',
+        'Salva impostazioni'),
+    "The Xbox 360 emulator the SDK's runtime comes from.": (
+        'Der Xbox-360-Emulator, aus dem die Laufzeitumgebung des SDK stammt.',
+        "L'émulateur Xbox 360 dont provient l'environnement d'exécution du SDK.",
+        'El emulador de Xbox 360 del que procede el entorno de ejecución del SDK.',
+        "L'emulatore Xbox 360 da cui deriva l'ambiente di esecuzione dell'SDK."),
+    'The recompiler and runtime that turn the Xbox 360 game into a PC program, built from the Xenia emulator.': (
+        'Der Recompiler und die Laufzeitumgebung, die das Xbox-360-Spiel zu einem PC-Programm machen, entstanden aus dem Xenia-Emulator.',
+        "Le recompilateur et l'environnement d'exécution qui font du jeu Xbox 360 un programme PC, issus de l'émulateur Xenia.",
+        'El recompilador y el entorno de ejecución que convierten el juego de Xbox 360 en un programa de PC, derivados del emulador Xenia.',
+        "Il ricompilatore e il runtime che trasformano il gioco Xbox 360 in un programma per PC, derivati dall'emulatore Xenia."),
+    'Website': (
+        'Website',
+        'Site web',
+        'Sitio web',
+        'Sito web'),
+    'B (circle) on the main menu quits the game': (
+        'B (Kreis) im Hauptmenü beendet das Spiel',
+        'B (rond) dans le menu principal quitte le jeu',
+        'B (círculo) en el menú principal cierra el juego',
+        'B (cerchio) nel menu principale chiude il gioco'),
+    'Black and white stay as they are.': (
+        'Schwarz und Weiß bleiben, wie sie sind.',
+        'Le noir et le blanc restent tels quels.',
+        'El negro y el blanco no cambian.',
+        'Il nero e il bianco restano invariati.'),
+    'Button prompts': (
+        'Tastenhinweise',
+        'Indications des boutons',
+        'Avisos de botones',
+        'Suggerimenti dei tasti'),
+    'Extra stick dead zone (%)': (
+        'Zusätzliche Stick-Totzone (%)',
+        'Zone morte supplémentaire des sticks (%)',
+        'Zona muerta adicional de los sticks (%)',
+        'Zona morta aggiuntiva degli stick (%)'),
+    "Keeps floors and walls sharp at an angle. The HUD and text keep the game's own filtering.": (
+        'Hält Böden und Wände auch schräg betrachtet scharf. HUD und Text behalten die Filterung des Spiels.',
+        'Garde les sols et les murs nets vus de biais. Le HUD et le texte gardent le filtrage du jeu.',
+        'Mantiene nítidos suelos y paredes en ángulo. El HUD y el texto conservan el filtrado del juego.',
+        'Mantiene nitidi pavimenti e muri visti di sbieco. HUD e testo mantengono il filtraggio del gioco.'),
+    "On top of the game's own; raise it if the camera or Matt drifts on his own. 0: the game's alone.": (
+        'Zusätzlich zu der des Spiels; erhöhe sie, wenn die Kamera oder Matt von allein driftet. 0: nur die des Spiels.',
+        'En plus de celle du jeu ; augmentez-la si la caméra ou Matt dérive tout seul. 0 : celle du jeu seule.',
+        'Además de la del juego; súbela si la cámara o Matt se mueven solos. 0: solo la del juego.',
+        'In aggiunta a quella del gioco; alzala se la telecamera o Matt si muovono da soli. 0: solo quella del gioco.'),
+    'Settings are saved with Save settings, or when you press Play.': (
+        'Einstellungen werden mit „Einstellungen speichern“ gespeichert, oder wenn du auf Spielen drückst.',
+        'Les réglages sont enregistrés avec Enregistrer les réglages, ou quand vous appuyez sur Jouer.',
+        'Los ajustes se guardan con Guardar ajustes, o al pulsar Jugar.',
+        'Le impostazioni vengono salvate con Salva impostazioni, o quando premi Gioca.'),
+    "The game's voices, subtitles and text. The achievement names follow it too.": (
+        'Stimmen, Untertitel und Texte des Spiels. Die Erfolgsnamen richten sich auch danach.',
+        'Les voix, sous-titres et textes du jeu. Les noms des succès suivent aussi.',
+        'Las voces, subtítulos y textos del juego. Los nombres de los logros también lo siguen.',
+        'Voci, sottotitoli e testi del gioco. Anche i nomi degli obiettivi lo seguono.'),
+    "Xbox-style and PlayStation controllers, with the game's own button layout. Auto shows PlayStation buttons while a DualShock or DualSense is connected, Xbox buttons otherwise.": (
+        'Xbox-artige und PlayStation-Controller, mit der Tastenbelegung des Spiels. Automatisch zeigt PlayStation-Tasten, solange ein DualShock oder DualSense verbunden ist, sonst Xbox-Tasten.',
+        'Manettes de type Xbox et PlayStation, avec la disposition des boutons du jeu. Auto affiche les boutons PlayStation quand une DualShock ou DualSense est connectée, sinon les boutons Xbox.',
+        'Mandos tipo Xbox y de PlayStation, con la distribución de botones del juego. Automático muestra los botones de PlayStation mientras hay un DualShock o DualSense conectado, si no los de Xbox.',
+        'Controller in stile Xbox e PlayStation, con la disposizione dei tasti del gioco. Automatico mostra i tasti PlayStation quando è collegato un DualShock o DualSense, altrimenti quelli Xbox.'),
+    "60 uses the game's own 60 FPS mode, so it runs at normal speed.": (
+        '60 nutzt den 60-FPS-Modus des Spiels, es läuft also in normaler Geschwindigkeit.',
+        '60 utilise le mode 60 FPS du jeu, qui tourne donc à vitesse normale.',
+        '60 usa el modo de 60 FPS del propio juego, así que va a velocidad normal.',
+        '60 usa la modalità 60 FPS del gioco, quindi gira a velocità normale.'),
+    'By nlwstein: the native Vulkan renderer, SDK patches, crash reporting and the leak scanner. BSD 3-Clause licence.': (
+        'Von nlwstein: der native Vulkan-Renderer, SDK-Patches, Absturzberichte und der Leak-Scanner. BSD-3-Clause-Lizenz.',
+        "Par nlwstein : le rendu Vulkan natif, des correctifs du SDK, les rapports de plantage et l'analyseur de fuites. Licence BSD 3-Clause.",
+        'De nlwstein: el renderizador Vulkan nativo, parches del SDK, informes de fallos y el escáner de filtraciones. Licencia BSD 3-Clause.',
+        "Di nlwstein: il renderer Vulkan nativo, patch dell'SDK, rapporti di crash e lo scanner di fughe. Licenza BSD 3-Clause."),
+    'Eat Lead: The Return of Matt Hazard is a trademark of its owners. This project is not affiliated with or endorsed by its publisher, its developer or Microsoft.': (
+        'Eat Lead: The Return of Matt Hazard ist eine Marke ihrer Inhaber. Dieses Projekt steht in keiner Verbindung zu Publisher, Entwickler oder Microsoft und wird von ihnen nicht unterstützt.',
+        "Eat Lead: The Return of Matt Hazard est une marque de ses propriétaires. Ce projet n'est ni affilié ni approuvé par son éditeur, son développeur ou Microsoft.",
+        'Eat Lead: The Return of Matt Hazard es una marca de sus propietarios. Este proyecto no está afiliado ni respaldado por su editor, su desarrollador ni Microsoft.',
+        'Eat Lead: The Return of Matt Hazard è un marchio dei rispettivi proprietari. Questo progetto non è affiliato né approvato dal suo editore, dal suo sviluppatore o da Microsoft.'),
+    'Shared tooling, and the launcher this one is adapted from.': (
+        'Gemeinsame Werkzeuge und der Launcher, aus dem dieser entstanden ist.',
+        'Des outils partagés, et le lanceur dont celui-ci est adapté.',
+        'Herramientas compartidas, y el lanzador del que se adaptó este.',
+        'Strumenti condivisi, e il launcher da cui deriva questo.'),
+    'The game draws at 1280×720; this is the resolution the native renderer draws it at. Higher is sharper and slower.': (
+        'Das Spiel zeichnet in 1280×720; dies ist die Auflösung, in der der native Renderer es zeichnet. Höher ist schärfer und langsamer.',
+        "Le jeu dessine en 1280×720 ; c'est la résolution à laquelle le rendu natif le dessine. Plus haut = plus net et plus lent.",
+        'El juego dibuja a 1280×720; esta es la resolución a la que lo dibuja el renderizador nativo. Más alta es más nítida y más lenta.',
+        'Il gioco disegna a 1280×720; questa è la risoluzione a cui lo disegna il renderer nativo. Più alta è più nitida e più lenta.'),
+    'The size of the picture on your screen.': (
+        'Die Größe des Bildes auf deinem Bildschirm.',
+        "La taille de l'image sur votre écran.",
+        'El tamaño de la imagen en tu pantalla.',
+        "La dimensione dell'immagine sul tuo schermo."),
     'The Bourne Conspiracy': (
         'The Bourne Conspiracy',
         'The Bourne Conspiracy',

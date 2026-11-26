@@ -37,8 +37,11 @@ RELEASES_URL = "https://github.com/thegh0sts/EAT-LEAD-X360-PORT/releases/latest"
 SETTINGS_PATH = LAUNCHER_HOME / "settings.json"
 PANEL = "#1c1e24"
 ACCENT_HOVER = "#d08a2e"
+# The settings' controls (button groups, drop-downs, buttons), in this launcher's colours.
+ON_ACCENT = "white"
+FIELD_BG, FIELD_HOVER, BORDER = "#2a2d35", "#353a43", "#4a505a"
 
-TABS = ("Game files", "Display", "Graphics", "Controls", "Saves", "Achievements")
+TABS = ("Game files", "Display", "Graphics", "Controls", "Saves", "Achievements", "Credits")
 # The game's languages (Games\<lang> on the disc) -> XLanguage ids (--user_language).
 LANGUAGES = {"English": 1, "German": 3, "French": 4, "Spanish": 5, "Italian": 6}
 
@@ -394,14 +397,264 @@ def game_env(s):
 
 def link_button(parent, text, cmd):
     """A small brass button: the launcher's secondary actions (Open logs, ...)."""
-    return tk.Button(parent, text=text, command=cmd, font=("Segoe UI", 9), fg="white", bg=ACCENT,
-                     activebackground=ACCENT_HOVER, activeforeground="white", bd=0, padx=10, pady=3, cursor="hand2")
+    return tk.Button(parent, text=text, command=cmd, font=("Segoe UI", 9), fg=ON_ACCENT, bg=ACCENT,
+                     activebackground=ACCENT_HOVER, activeforeground=ON_ACCENT, bd=0, padx=10, pady=3, cursor="hand2")
+
+
+# The settings layout follows the 007 launcher's (thegh0sts/007-QOS-X360-PORT, 27 Nov), in this launcher's colours:
+# each setting's name with its note under it on the left, its control in the right-hand third (button groups,
+# drop-downs, sliders and button stacks, all as wide as the column, so they line up).
+
+def two_columns(box):
+    """A settings page's grid: names and notes in the left two thirds, the controls in the right third."""
+    box.columnconfigure(0, weight=2, uniform="settings")
+    box.columnconfigure(1, weight=1, uniform="settings")
+
+
+def wrapping(label):
+    """Wrap the label's text at whatever width its grid cell gives it (the left column), so long lines go on to the
+    next line instead of widening the column."""
+    label.configure(anchor="w", justify="left", wraplength=470)
+    label.bind("<Configure>", lambda e: label.configure(wraplength=max(120, e.width - 2)))
+    return label
 
 
 def note(box, row, text):
-    """A small grey explanation under a setting."""
-    tk.Label(box, text=tr(text), font=("Segoe UI", 8), fg=DIM, bg=PANEL, anchor="w", justify="left", wraplength=640
-             ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 4))
+    """A small grey explanation of a setting. Right after a setting (row - 1 is its row) it goes in the setting's own
+    cell under its name, so the name and the note share one grid row and the control sits centred beside both;
+    anywhere else it gets a row of its own in the left column."""
+    cell = getattr(box, "setting_cells", {}).get(row - 1)
+    label = wrapping(tk.Label(cell or box, text=tr(text), font=("Segoe UI", 8), fg=DIM, bg=PANEL))
+    if cell:
+        label.pack(fill="x", pady=(1, 0))
+    else:
+        label.grid(row=row, column=0, sticky="ew", pady=(0, 4), padx=(0, 16))
+    return label
+
+
+def setting_name(box, row, text):
+    """A setting's name in the left column, wrapped like the notes: in a cell of its own that its note joins.
+    Returns the cell (hidden with the control when the setting doesn't apply)."""
+    cell = tk.Frame(box, bg=PANEL)
+    cell.grid(row=row, column=0, sticky="ew", pady=(5, 5), padx=(0, 16))
+    if not hasattr(box, "setting_cells"):
+        box.setting_cells = {}
+    box.setting_cells[row] = cell
+    wrapping(tk.Label(cell, text=tr(text), font=("Segoe UI", 10), fg=FG, bg=PANEL)).pack(fill="x")
+    return cell
+
+
+def dropdown(parent, bg, labels, current, choose, width=None):
+    """A drop-down in the toggle-button-group style: a dark field with a thin grey border, the chosen label and an
+    arrow; a click opens the list. current() gives the chosen index, choose(i) picks one. Up/Down change it and
+    Space/Return open the list when it has focus. width: in characters; without it the field takes the width its
+    layout gives it. The returned frame's refresh() shows a change made elsewhere."""
+    holder = tk.Frame(parent, bg=BORDER, padx=1, pady=1, highlightthickness=1, highlightbackground=bg,
+                      highlightcolor=ACCENT_HOVER, takefocus=1)
+    face = tk.Label(holder, font=("Segoe UI", 9), bg=FIELD_BG, fg=FG, anchor="w", padx=8, pady=2, cursor="hand2",
+                    width=width or 1)
+    arrow = tk.Label(holder, text="▾", font=("Segoe UI", 9), bg=FIELD_BG, fg=DIM, padx=8, pady=2, cursor="hand2")
+    face.pack(side="left", fill="x", expand=True)
+    arrow.pack(side="right")
+
+    def refresh():
+        i = current()
+        face.config(text=labels[i] if 0 <= i < len(labels) else "")
+
+    def pick(i):
+        if 0 <= i < len(labels) and i != current():
+            choose(i)
+        if holder.winfo_exists():
+            refresh()
+
+    def open_list(_=None):
+        """The list: a borderless window as wide as the field, just below it (above it when it wouldn't fit on the
+        screen), the current choice lit. A click picks; a click outside or Escape closes it; Up/Down/Return work."""
+        holder.focus_set()
+        popup = tk.Toplevel(holder)
+        popup.overrideredirect(True)
+        popup.attributes("-topmost", True)
+        frame = tk.Frame(popup, bg=BORDER, padx=1, pady=1)
+        frame.pack(fill="both", expand=True)
+        rows, lit_row = [], [current()]
+
+        def paint():
+            for j, row in enumerate(rows):
+                on = j == lit_row[0]
+                row.config(bg=ACCENT if on else FIELD_BG, fg=ON_ACCENT if on else FG)
+
+        def close(_=None):
+            if popup.winfo_exists():
+                popup.grab_release()
+                popup.destroy()
+            if holder.winfo_exists():
+                holder.focus_set()
+            return "break"
+
+        def choose_row(j):
+            close()
+            pick(j)
+            return "break"
+
+        for j, label in enumerate(labels):
+            row = tk.Label(frame, text=label, font=("Segoe UI", 9), anchor="w", padx=8, pady=3, cursor="hand2")
+            row.pack(fill="x")
+            row.bind("<Enter>", lambda _, j=j: (lit_row.__setitem__(0, j), paint()))
+            row.bind("<ButtonRelease-1>", lambda _, j=j: choose_row(j))
+            rows.append(row)
+        paint()
+
+        def outside(event):
+            inside = popup.winfo_containing(event.x_root, event.y_root)
+            if inside is None or inside.winfo_toplevel() is not popup:
+                close()
+
+        def move(step):
+            lit_row[0] = max(0, min(len(rows) - 1, lit_row[0] + step))
+            paint()
+            return "break"
+
+        popup.bind("<Button-1>", outside)
+        popup.bind("<Escape>", close)
+        popup.bind("<Up>", lambda _: move(-1))
+        popup.bind("<Down>", lambda _: move(1))
+        popup.bind("<Return>", lambda _: choose_row(lit_row[0]))
+        popup.update_idletasks()
+        w = max(holder.winfo_width(), popup.winfo_reqwidth())
+        h = popup.winfo_reqheight()
+        x, y = holder.winfo_rootx(), holder.winfo_rooty() + holder.winfo_height()
+        if y + h > holder.winfo_screenheight():
+            y = holder.winfo_rooty() - h
+        popup.geometry(f"{w}x{h}+{x}+{y}")
+        popup.grab_set()
+        popup.focus_set()
+        return "break"
+
+    for w in (face, arrow):
+        w.bind("<Button-1>", open_list)
+        w.bind("<Enter>", lambda _: (face.config(bg=FIELD_HOVER), arrow.config(bg=FIELD_HOVER)))
+        w.bind("<Leave>", lambda _: (face.config(bg=FIELD_BG), arrow.config(bg=FIELD_BG)))
+    holder.bind("<space>", open_list)
+    holder.bind("<Return>", open_list)
+    holder.bind("<Up>", lambda _: (pick(current() - 1), "break")[1])
+    holder.bind("<Down>", lambda _: (pick(current() + 1), "break")[1])
+    holder.refresh = refresh
+
+    def set_labels(new):
+        labels[:] = list(new)
+        refresh()
+    holder.set_labels = set_labels
+    refresh()
+    return holder
+
+
+def button_group(parent, bg, labels, current, choose, var, per_row=5):
+    """A toggle button group: joined buttons, one per label, the current one lit, sharing the control column
+    equally; more than per_row wrap to another row. current() gives the lit button's index, choose(i) picks one;
+    redrawn whenever var changes. Click a button, or Left/Right when the group has focus (Space moves to the next
+    one). The returned frame's set_labels(labels) replaces the buttons (lists that change with other settings)."""
+    holder = tk.Frame(parent, bg=BORDER, padx=1, pady=1, highlightthickness=1, highlightbackground=bg,
+                      highlightcolor=ACCENT_HOVER, takefocus=1)
+    buttons = []
+
+    def draw(*_):
+        lit = current()
+        for i, b in enumerate(buttons):
+            b.config(bg=ACCENT if i == lit else FIELD_BG, fg=ON_ACCENT if i == lit else DIM)
+
+    def pick(i):
+        if buttons:
+            choose(max(0, min(len(buttons) - 1, i)))
+        holder.focus_set()
+        return "break"
+
+    def hover(i, entering):
+        if i != current():
+            buttons[i].config(bg=FIELD_HOVER if entering else FIELD_BG)
+
+    def set_labels(new):
+        for b in buttons:
+            b.destroy()
+        buttons.clear()
+        new = list(new)
+        cols = min(per_row, len(new)) or 1
+        for c in range(per_row):
+            holder.columnconfigure(c, weight=1 if c < cols else 0, uniform="buttons" if c < cols else "")
+        for i, label in enumerate(new):
+            row, col = divmod(i, cols)
+            # the last button of a short last row takes the rest of the row
+            span = cols - col if i == len(new) - 1 else 1
+            b = tk.Label(holder, text=label, font=("Segoe UI", 9), width=1, pady=2, cursor="hand2")
+            b.grid(row=row, column=col, columnspan=span, sticky="nsew", padx=(1 if col else 0, 0),
+                   pady=(1 if row else 0, 0))
+            b.bind("<Button-1>", lambda _, i=i: pick(i))
+            b.bind("<Enter>", lambda _, i=i: hover(i, True))
+            b.bind("<Leave>", lambda _, i=i: hover(i, False))
+            buttons.append(b)
+        draw()
+
+    holder.bind("<Left>", lambda _: pick(current() - 1))
+    holder.bind("<Right>", lambda _: pick(current() + 1))
+    holder.bind("<space>", lambda _: pick((current() + 1) % max(1, len(buttons))))
+    holder.set_labels = set_labels
+    holder.refresh = draw
+    var.trace_add("write", draw)
+    set_labels(labels)
+    return holder
+
+
+def slide_switch(parent, v, bg):
+    """An on/off slide switch for the BooleanVar v, on background bg: "Close launcher when the game starts" in the
+    bottom bar, where a button group has no room. Click it, or Space when it has focus."""
+    switch = tk.Canvas(parent, width=44, height=22, bg=bg, highlightthickness=1, highlightbackground=bg,
+                       highlightcolor=ACCENT_HOVER, cursor="hand2", takefocus=1)
+
+    def draw(*_):
+        on = bool(v.get())
+        track = ACCENT if on else "#3a3f46"
+        switch.delete("all")
+        switch.create_oval(1, 1, 21, 21, fill=track, outline=track)
+        switch.create_oval(23, 1, 43, 21, fill=track, outline=track)
+        switch.create_rectangle(11, 1, 33, 21, fill=track, outline=track)
+        x = 25 if on else 4
+        switch.create_oval(x, 4, x + 15, 19, fill=FG, outline="")
+
+    def flip(_=None):
+        v.set(not v.get())
+        return "break"
+
+    switch.bind("<Button-1>", flip)
+    switch.bind("<space>", flip)
+    v.trace_add("write", draw)
+    draw()
+    return switch
+
+
+
+# Button texts for the settings shown as button groups: shorter than the saved values (which stay as they were,
+# so existing settings keep working). Translated with tr_label.
+CHOICE_LABELS = {
+    "resolution": {RESOLUTIONS[0]: "720p", RESOLUTIONS[1]: "1080p", RESOLUTIONS[2]: "1440p", RESOLUTIONS[3]: "4K"},
+    "render_scale": {SCALES[0]: "720p", SCALES[1]: "1440p", SCALES[2]: "2160p"},
+    "aa": {AA[0]: "Off", AA[1]: "FXAA", AA[2]: "FXAA strong"},
+    "fps": {FPS[0]: "30", FPS[1]: "60"},
+    "fps_counter": {FPS_COUNTER[0]: "Off", FPS_COUNTER[1]: "FPS", FPS_COUNTER[2]: "Detailed"},
+    "texture_filtering": {TEXTURE_FILTERING[0]: "Original", TEXTURE_FILTERING[1]: "4x", TEXTURE_FILTERING[2]: "8x",
+                          TEXTURE_FILTERING[3]: "16x"},
+    "pad_prompts": {PAD_PROMPTS[0]: "Auto", PAD_PROMPTS[1]: "PlayStation", PAD_PROMPTS[2]: "Xbox"},
+}
+
+# The Credits tab: (name, what it gave the port, website or None), as in the README's Credits. Names aren't
+# translated; the texts are.
+CREDITS = [
+    ("ReXGlue SDK", "The recompiler and runtime that turn the Xbox 360 game into a PC program, built from the Xenia "
+                    "emulator.", "https://github.com/rexglue/rexglue-sdk"),
+    ("Skullburglar", "By nlwstein: the native Vulkan renderer, SDK patches, crash reporting and the leak scanner. BSD "
+                     "3-Clause licence.", "https://github.com/nlwstein/skullburglar"),
+    ("Xenia", "The Xbox 360 emulator the SDK's runtime comes from.", "https://xenia.jp"),
+    ("The Bourne Conspiracy recompilation", "Shared tooling, and the launcher this one is adapted from.",
+     "https://github.com/thegh0sts/bourne-conspiracy-x360-recomp"),
+]
 
 
 class SettingsView(tk.Frame):
@@ -411,6 +664,10 @@ class SettingsView(tk.Frame):
         self.s = dict(settings) if settings else load_settings()
         self.on_language = on_language
         self.vars, self.combos, self.combo_values, self.combo_labels = {}, {}, {}, {}
+        # The window has a fixed size, so each tab scrolls when its settings don't fit. The wheel scrolls the tab
+        # that's showing, wherever the pointer is in it.
+        self.scrollers = {}
+        self.bind_all("<MouseWheel>", self._wheel)
 
         head = tk.Frame(self, bg=BG)
         head.pack(fill="x", padx=28, pady=(20, 4))
@@ -421,10 +678,8 @@ class SettingsView(tk.Frame):
         names = [tr("Same as game")] + [launcher_text.NATIVE_NAMES[c] for c in launcher_text.LANGUAGE_CODES]
         current = self.s.get("launcher_language", "same")
         self.vars["launcher_language"] = tk.StringVar(value=current if current in choices else "same")
-        picker = ttk.Combobox(head, values=names, state="readonly", width=16)
-        picker.current(choices.index(self.vars["launcher_language"].get()))
-        picker.pack(side="right", anchor="s")
-        picker.bind("<<ComboboxSelected>>", lambda e: self._launcher_language(choices[picker.current()]))
+        dropdown(head, BG, names, lambda: choices.index(self.vars["launcher_language"].get()),
+                 lambda i: self._launcher_language(choices[i]), width=16).pack(side="right", anchor="s")
         tk.Label(head, text=tr("Launcher language"), font=("Segoe UI", 9), fg=DIM, bg=BG
                  ).pack(side="right", anchor="s", padx=(16, 6), pady=(0, 2))
         tk.Label(head, text=tr("Launcher {version}", version=VERSION), font=("Segoe UI", 9), fg=DIM, bg=BG
@@ -439,7 +694,7 @@ class SettingsView(tk.Frame):
             box.pack(fill="x", padx=28, pady=(6, 2))
             tk.Label(box, text=tr("Your game was built with {built}; this launcher is {version}. Reinstall to rebuild "
                                   "the game with this version's changes.", built=built_version(info), version=VERSION),
-                     font=("Segoe UI", 10, "bold"), fg="white", bg=ACCENT, wraplength=700, justify="left"
+                     font=("Segoe UI", 10, "bold"), fg=ON_ACCENT, bg=ACCENT, wraplength=700, justify="left"
                      ).pack(side="left", padx=10, pady=8)
             tk.Button(box, text=tr("Reinstall now"), command=on_reinstall, font=("Segoe UI", 10, "bold"),
                       bd=0, padx=10, pady=4).pack(side="right", padx=10)
@@ -452,7 +707,7 @@ class SettingsView(tk.Frame):
 
         body = tk.Frame(self, bg=BG)
         nav = tk.Frame(body, bg=BG, width=180)
-        nav.pack(side="left", fill="y", pady=(4, 0))
+        nav.pack(side="left", fill="y")  # level with the page
         nav.pack_propagate(False)
         self.pages_frame = tk.Frame(body, bg=PANEL)
         self.pages_frame.pack(side="left", fill="both", expand=True)
@@ -463,56 +718,52 @@ class SettingsView(tk.Frame):
             b.pack(fill="x", pady=(0, 2))
             self.tab_buttons[name] = b
 
+        # Game files: what each thing is on the left, its buttons on the right.
         box = self._page("Game files")
-        tk.Label(box, text=tr("Installed in {folder}", folder=info['game']), font=("Segoe UI", 9), fg=DIM, bg=PANEL,
-                 anchor="w").grid(row=0, column=0, columnspan=2, sticky="w")
-        self._link(box, tr("Reinstall from a disc image..."), on_reinstall).grid(row=1, column=0, sticky="w", pady=(10, 4))
-        self._link(box, tr("Use a different install..."), on_locate).grid(row=2, column=0, sticky="w")
-        self._subheading(box, 3, "Help")
-        links = tk.Frame(box, bg=PANEL)
-        links.grid(row=4, column=0, columnspan=2, sticky="w")
-        self._link(links, tr("Open logs"), self.open_logs).pack(side="left")
-        self._link(links, tr("Save crash report"), self.crash_report).pack(side="left", padx=8)
-        self._link(links, tr("Check for updates"), lambda: self.check_updates(manual=True)).pack(side="left")
-        self._subheading(box, 5, "Game")
-        self._combo(box, 6, "language", "Game language", list(LANGUAGES))
-        note(box, 7, "The game's voices, subtitles and text. The achievement names follow it too.")
+        setting_name(box, 0, "Install location")
+        note(box, 1, str(info['game']))
+        self._button_stack(box, 0, [(tr("Reinstall from a disc image..."), on_reinstall),
+                                    (tr("Use a different install..."), on_locate)], pady=(2, 18))
+        setting_name(box, 2, "Help")
+        note(box, 3, "If the game crashes or misbehaves: the logs show what happened, and a crash report gathers them "
+                     "into one file to send with a bug report.")
+        self._button_stack(box, 2, [(tr("Open logs"), self.open_logs),
+                                    (tr("Save crash report"), self.crash_report),
+                                    (tr("Check for updates"), lambda: self.check_updates(manual=True))])
+        self._subheading(box, 4, "Game")
+        self._combo(box, 5, "language", "Game language", list(LANGUAGES))
+        note(box, 6, "The game's voices, subtitles and text. The achievement names follow it too.")
 
         box = self._page("Display")
-        self._check(box, 0, "fullscreen", "Fullscreen")
-        self._combo(box, 1, "resolution", "Output resolution", RESOLUTIONS)
-        self._combo(box, 2, "render_scale", "Render resolution (sharper, slower)", SCALES)
-        note(box, 3, "The game draws at 1280×720; the render resolution is what the native renderer draws it at. "
-                     "Output resolution is the size of the picture on your screen.")
-        self._combo(box, 4, "aa", "Anti-aliasing", AA)
-        self._combo(box, 5, "fps", "Frame rate", FPS)
-        note(box, 6, "60 uses the game's own 60 FPS mode, so it runs at normal speed.")
-        self._combo(box, 7, "fps_counter", "FPS counter", FPS_COUNTER)
-        self._check(box, 8, "hide_achievements", "Hide achievement pop-ups")
+        self._toggle(box, 0, "fullscreen", "Fullscreen")
+        self._choice(box, 1, "resolution", "Output resolution", RESOLUTIONS)
+        note(box, 2, "The size of the picture on your screen.")
+        self._choice(box, 3, "render_scale", "Render resolution (sharper, slower)", SCALES)
+        note(box, 4, "The game draws at 1280×720; this is the resolution the native renderer draws it at. Higher is "
+                     "sharper and slower.")
+        self._choice(box, 5, "aa", "Anti-aliasing", AA)
+        self._choice(box, 6, "fps", "Frame rate", FPS)
+        note(box, 7, "60 uses the game's own 60 FPS mode, so it runs at normal speed.")
+        self._choice(box, 8, "fps_counter", "FPS counter", FPS_COUNTER)
+        self._toggle(box, 9, "hide_achievements", "Achievement pop-ups", invert=True)
         self.vars["language"].trace_add("write", lambda *_: self._game_language_changed())
-        tk.Label(box, text=tr("Native renderer by the Skullburglar project (github.com/nlwstein/skullburglar, "
-                              "BSD 3-Clause)."), font=("Segoe UI", 8), fg=DIM, bg=PANEL, anchor="w"
-                 ).grid(row=9, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
         box = self._page("Graphics")
         self._slider(box, 0, "brightness", "Brightness (%)", 50, 200, 5)
         note(box, 1, "Black and white stay as they are.")
-        self._combo(box, 2, "texture_filtering", "Texture filtering", TEXTURE_FILTERING)
+        self._choice(box, 2, "texture_filtering", "Texture filtering", TEXTURE_FILTERING)
         note(box, 3, "Keeps floors and walls sharp at an angle. The HUD and text keep the game's own filtering.")
 
         box = self._page("Controls")
-        tk.Label(box, text=tr("Xbox-style controllers and PlayStation controllers, with the game's own button layout."),
-                 font=("Segoe UI", 9), fg=DIM, bg=PANEL, anchor="w").grid(row=0, column=0, columnspan=2, sticky="w",
-                                                                         pady=(0, 8))
-        self._combo(box, 1, "pad_prompts", "Button prompts", PAD_PROMPTS)
-        note(box, 2, "Auto shows PlayStation buttons while a DualShock or DualSense is connected, Xbox buttons "
-                     "otherwise.")
-        self._slider(box, 3, "deadzone", "Extra stick dead zone (%)", 0, 40, 1)
-        note(box, 4, "On top of the game's own; raise it if the camera or Matt drifts on his own. 0: the game's alone.")
-        self._slider(box, 5, "vibration_strength", "Controller vibration (%, 0 = off)", 0, 100, 5)
-        self._check(box, 6, "menu_b_quit", "B (circle) on the main menu quits the game")
+        self._choice(box, 0, "pad_prompts", "Button prompts", PAD_PROMPTS)
+        note(box, 1, "Xbox-style and PlayStation controllers, with the game's own button layout. Auto shows "
+                     "PlayStation buttons while a DualShock or DualSense is connected, Xbox buttons otherwise.")
+        self._slider(box, 2, "deadzone", "Extra stick dead zone (%)", 0, 40, 1)
+        note(box, 3, "On top of the game's own; raise it if the camera or Matt drifts on his own. 0: the game's alone.")
+        self._slider(box, 4, "vibration_strength", "Controller vibration (%, 0 = off)", 0, 100, 5)
+        self._toggle(box, 5, "menu_b_quit", "B (circle) on the main menu quits the game")
 
-        box = self._page("Saves")
+        box = self._page("Saves", scroll=False)
         line = tk.Frame(box, bg=PANEL)
         line.grid(row=0, column=0, columnspan=2, sticky="w")
         self._link(line, tr("Open saves folder"), self.open_saves).pack(side="left")
@@ -539,15 +790,29 @@ class SettingsView(tk.Frame):
         bar.pack(side="right", fill="y")
         self.saves_tree.bind("<Double-1>", lambda e: self.open_save_folder())
 
-        self._page("Achievements")
+        self._page("Achievements", scroll=False)
         self.achievements_box = tk.Frame(self.pages["Achievements"], bg=PANEL)
         self.achievements_box.pack(fill="both", expand=True)
+
+        # Credits: what the port is built on, as in the README's Credits, laid out like the settings: what it is on
+        # the left, its website on the right.
+        box = self._page("Credits")
+        row = 0
+        for title, text, url in CREDITS:
+            setting_name(box, row, title)
+            note(box, row + 1, text)
+            if url:
+                self._button_stack(box, row, [(tr("Website"), lambda u=url: webbrowser.open(u))])
+            row += 2
+        note(box, row, "Eat Lead: The Return of Matt Hazard is a trademark of its owners. This project is not "
+                       "affiliated with or endorsed by its publisher, its developer or Microsoft.")
         self.show_tab(self.s.get("tab") if self.s.get("tab") in TABS else "Display")
 
         foot = tk.Frame(self, bg=BG)
         foot.pack(side="bottom", fill="x", padx=28, pady=18)
         tk.Button(foot, text=tr("Play"), width=16, command=self.play, font=("Segoe UI", 13, "bold"), bg=ACCENT,
-                  fg="white", activebackground=ACCENT_HOVER, activeforeground="white", bd=0, pady=8).pack(side="left")
+                  fg=ON_ACCENT, activebackground=ACCENT_HOVER, activeforeground=ON_ACCENT, bd=0, pady=8
+                  ).pack(side="left")
         tk.Button(foot, text=tr("Save settings"), width=13, command=self.save, font=("Segoe UI", 12), bd=0, pady=8,
                   fg=ACCENT_HOVER, bg="#22252d", activebackground="#2c3039", activeforeground=ACCENT_HOVER,
                   highlightthickness=1, highlightbackground=ACCENT).pack(side="left", padx=(10, 0))
@@ -555,10 +820,10 @@ class SettingsView(tk.Frame):
                   bd=0, pady=8).pack(side="left", padx=10)
         tk.Button(foot, text=tr("Defaults"), width=10, command=self.reset, font=("Segoe UI", 11),
                   bd=0, pady=6).pack(side="right")
-        self.vars["close_on_play"] = tk.BooleanVar(value=self.s["close_on_play"])
-        tk.Checkbutton(foot, text=tr("Close launcher when the game starts"), variable=self.vars["close_on_play"],
-                       font=("Segoe UI", 9), fg=DIM, bg=BG, selectcolor=BG, activebackground=BG,
-                       activeforeground=FG).pack(side="right", padx=10)
+        v = self.vars["close_on_play"] = tk.BooleanVar(value=self.s["close_on_play"])
+        slide_switch(foot, v, BG).pack(side="right", padx=(6, 10))
+        tk.Label(foot, text=tr("Close launcher when the game starts"), font=("Segoe UI", 9), fg=DIM, bg=BG
+                 ).pack(side="right")
 
         self.status = tk.StringVar(value=tr("Settings are saved with Save settings, or when you press Play."))
         tk.Label(self, textvariable=self.status, font=("Segoe UI", 9), fg=DIM, bg=BG, wraplength=700,
@@ -567,14 +832,55 @@ class SettingsView(tk.Frame):
         self.saved = saved if saved is not None else self._snapshot()
 
     # widgets ------------------------------------------------------------
-    def _page(self, title):
-        page = tk.Frame(self.pages_frame, bg=PANEL, padx=22, pady=18)
+    def _page(self, title, scroll=True):
+        """A tab's page. With scroll, its settings sit in a canvas with a scroll bar that shows when they don't fit;
+        without (Saves, Achievements), the page lays out its own scrolling list."""
+        if not scroll:
+            page = tk.Frame(self.pages_frame, bg=PANEL, padx=22, pady=18)
+            page.place(relx=0, rely=0, relwidth=1, relheight=1)
+            box = tk.Frame(page, bg=PANEL)
+            box.pack(fill="x")
+            box.columnconfigure(1, weight=1)
+            self.pages[title] = page
+            return box
+        page = tk.Frame(self.pages_frame, bg=PANEL)
         page.place(relx=0, rely=0, relwidth=1, relheight=1)
-        box = tk.Frame(page, bg=PANEL)
+        canvas = tk.Canvas(page, bg=PANEL, highlightthickness=0, bd=0)
+        bar = ttk.Scrollbar(page, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=PANEL, padx=22, pady=18)
+        window = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=bar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+
+        def fit(_=None):
+            canvas.configure(scrollregion=(0, 0, inner.winfo_reqwidth(), inner.winfo_reqheight()))
+            if inner.winfo_reqheight() > canvas.winfo_height() > 1:
+                if not bar.winfo_ismapped():
+                    bar.pack(side="right", fill="y", before=canvas)
+            else:
+                if bar.winfo_ismapped():
+                    bar.pack_forget()
+                canvas.yview_moveto(0)
+
+        inner.bind("<Configure>", fit)
+        canvas.bind("<Configure>", lambda e: (canvas.itemconfigure(window, width=e.width), fit()))
+        box = tk.Frame(inner, bg=PANEL)
         box.pack(fill="x")
-        box.columnconfigure(1, weight=1)
+        two_columns(box)
         self.pages[title] = page
+        self.scrollers[title] = canvas
         return box
+
+    def _wheel(self, event):
+        canvas = self.scrollers.get(self.s.get("tab"))
+        try:
+            if canvas is None or not canvas.winfo_exists():
+                return
+            first, last = canvas.yview()
+            if first > 0 or last < 1:
+                canvas.yview_scroll(-1 * (event.delta // 120 or (1 if event.delta > 0 else -1)), "units")
+        except tk.TclError:  # a view the launcher has already swapped out
+            pass
 
     def _subheading(self, box, row, text):
         tk.Label(box, text=tr(text), font=("Segoe UI", 9, "bold"), fg=DIM, bg=PANEL
@@ -595,41 +901,69 @@ class SettingsView(tk.Frame):
     def _link(self, parent, text, cmd):
         return link_button(parent, text, cmd)
 
-    def _check(self, box, row, key, text):
-        v = self.vars[key] = tk.BooleanVar(value=self.s[key])
-        tk.Checkbutton(box, text=tr(text), variable=v, font=("Segoe UI", 10), fg=FG, bg=PANEL, selectcolor=PANEL,
-                       activebackground=PANEL, activeforeground=FG, anchor="w"
-                       ).grid(row=row, column=0, columnspan=2, sticky="w")
+    def _button(self, parent, bg, text, cmd):
+        """A button in the toggle-button-group style (an unlit button of a group): dark, thin grey border, focus
+        outline. Click, or Space/Return when it has focus."""
+        holder = tk.Frame(parent, bg=BORDER, padx=1, pady=1, highlightthickness=1, highlightbackground=bg,
+                          highlightcolor=ACCENT_HOVER, takefocus=1)
+        face = tk.Label(holder, text=text, font=("Segoe UI", 9), bg=FIELD_BG, fg=FG, width=1, pady=2,
+                        cursor="hand2")
+        face.pack(fill="x")
+        face.bind("<Enter>", lambda _: face.config(bg=FIELD_HOVER))
+        face.bind("<Leave>", lambda _: face.config(bg=FIELD_BG))
+        face.bind("<ButtonRelease-1>", lambda _: (cmd(), "break")[1])
+        for key in ("<space>", "<Return>"):
+            holder.bind(key, lambda _: (cmd(), "break")[1])
+        return holder
+
+    def _button_stack(self, box, row, buttons, pady=2):
+        """The right-hand column of a row: one or more buttons, one under another, as wide as the column."""
+        stack = tk.Frame(box, bg=PANEL)
+        stack.grid(row=row, column=1, sticky="ew", pady=pady)
+        for i, (text, cmd) in enumerate(buttons):
+            self._button(stack, PANEL, text, cmd).pack(fill="x", pady=(0 if i == 0 else 4, 0))
+        return stack
+
+    def _toggle(self, box, row, key, text, invert=False):
+        """An on/off setting: its name on the left, an Enabled | Disabled button group on the right. invert: the
+        setting is stored the other way round (hide_achievements under "Achievement pop-ups")."""
+        v = self.vars[key] = tk.BooleanVar(value=bool(self.s[key]))
+        setting_name(box, row, text)
+        button_group(box, PANEL, [tr("Enabled"), tr("Disabled")], lambda: 0 if bool(v.get()) != invert else 1,
+                     lambda i: v.set((i == 0) != invert), v).grid(row=row, column=1, sticky="ew", pady=2)
+
+    def _choice(self, box, row, key, text, values):
+        """A settings row choosing one of a few values with a toggle button group: the buttons show the short names
+        in CHOICE_LABELS (translated); the variable holds the value itself, so the settings file doesn't change."""
+        values = list(values)
+        v = self.vars[key] = tk.StringVar(value=self.s[key] if self.s[key] in values else DEFAULTS[key])
+        labels = CHOICE_LABELS.get(key, {})
+        cell = setting_name(box, row, text)
+        group = button_group(box, PANEL, [tr_label(labels.get(x, x)) for x in values],
+                             lambda: values.index(v.get()) if v.get() in values else -1,
+                             lambda i: v.set(values[i]), v)
+        group.grid(row=row, column=1, sticky="ew", pady=2)
+        self.combos[key], self.combo_labels[key], self.combo_values[key] = group, cell, values
 
     def _combo(self, box, row, key, text, values):
+        """A settings row with a drop-down (lists too long for buttons), styled and sized like the button groups."""
+        values = list(values)
         v = self.vars[key] = tk.StringVar(value=self.s[key] if self.s[key] in values else DEFAULTS[key])
-        label = tk.Label(box, text=tr(text), font=("Segoe UI", 10), fg=FG, bg=PANEL)
-        label.grid(row=row, column=0, sticky="w", pady=2)
-        combo = ttk.Combobox(box, state="readonly", width=36)
-        combo.grid(row=row, column=1, sticky="e", pady=2)
-        self.combos[key] = combo
-        self.combo_labels[key] = label
-        combo.bind("<<ComboboxSelected>>", lambda e, k=key: self._combo_picked(k))
-        v.trace_add("write", lambda *_, k=key: self._combo_show(k))
-        self.combo_values[key] = list(values)
-        combo["values"] = [tr_label(x) for x in values]
-        self._combo_show(key)
-
-    def _combo_show(self, key):
-        if key in self.combos:
-            self.combos[key].set(tr_label(self.vars[key].get()))
-
-    def _combo_picked(self, key):
-        i = self.combos[key].current()
-        if 0 <= i < len(self.combo_values[key]):
-            self.vars[key].set(self.combo_values[key][i])
+        cell = setting_name(box, row, text)
+        combo = dropdown(box, PANEL, [tr_label(x) for x in values],
+                         lambda: values.index(v.get()) if v.get() in values else 0,
+                         lambda i: v.set(values[i]))
+        combo.grid(row=row, column=1, sticky="ew", pady=2)
+        self.combos[key], self.combo_labels[key], self.combo_values[key] = combo, cell, values
+        v.trace_add("write", lambda *_: combo.refresh())
 
     def _slider(self, box, row, key, text, lo, hi, step):
+        """A settings row with a slider as wide as the control column."""
         v = self.vars[key] = tk.IntVar(value=int(self.s[key]))
-        tk.Label(box, text=tr(text), font=("Segoe UI", 10), fg=FG, bg=PANEL).grid(row=row, column=0, sticky="w")
-        tk.Scale(box, variable=v, from_=lo, to=hi, resolution=step, orient="horizontal", length=230,
-                 bg=PANEL, fg=FG, troughcolor="#2a2d35", highlightthickness=0, bd=0, activebackground=ACCENT
-                 ).grid(row=row, column=1, sticky="e")
+        setting_name(box, row, text)
+        tk.Scale(box, variable=v, from_=lo, to=hi, resolution=step, orient="horizontal", length=120,
+                 bg=PANEL, fg=FG, troughcolor=FIELD_BG, highlightthickness=0, bd=0, activebackground=ACCENT
+                 ).grid(row=row, column=1, sticky="ew")
 
     def _launcher_language(self, choice):
         """A launcher language picked: saved at once on its own, then the launcher is drawn again in it."""
