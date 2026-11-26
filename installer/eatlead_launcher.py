@@ -29,9 +29,9 @@ from launcher_text import tr, tr_label
 from eatlead_installer import (ACCENT, APP_NAME, BG, DIM, FG, LAUNCHER_HOME, InstallView, install_info_path,
                                make_root, start_game)
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 # The last launcher version that changed the game itself: installs built before it are asked to rebuild.
-GAME_VERSION = "0.1.0"
+GAME_VERSION = "0.1.1"
 RELEASES_API = "https://api.github.com/repos/thegh0sts/EAT-LEAD-X360-PORT/releases/latest"
 RELEASES_URL = "https://github.com/thegh0sts/EAT-LEAD-X360-PORT/releases/latest"
 SETTINGS_PATH = LAUNCHER_HOME / "settings.json"

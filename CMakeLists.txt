@@ -4,8 +4,8 @@
 
 cmake_minimum_required(VERSION 3.25)
 # The release number, shown in the log's first line (version_log.cpp).
-project(eatlead VERSION 0.1.0 LANGUAGES CXX)
-set(EATLEAD_RELEASE "0.1.0")
+project(eatlead VERSION 0.1.1 LANGUAGES CXX)
+set(EATLEAD_RELEASE "0.1.1")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
